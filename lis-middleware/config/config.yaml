@@ -1,0 +1,92 @@
+# config/config.yaml
+# ---------------------------------------------------------------------------
+# LIS Middleware configuration
+# Analysis:  analyzer  ->  this middleware  ->  Oracle DB  ->  Oracle APEX
+# ---------------------------------------------------------------------------
+
+app:
+  name: "LIS Middleware"
+  timezone: "Asia/Dhaka"
+  log_level: "INFO"
+  log_file: "logs/lis_middleware.log"
+  # AUTO = detect ASTM vs HL7 per message. Set ASTM or HL7 to force one.
+  default_protocol: "AUTO"
+  # How to acknowledge back to the analyzer: ASTM (0x06) or MLLP (full ACK msg)
+  ack_mode: "ASTM"
+  # Reject a test code that is not in analyzer.test_code_map (safer in production)
+  strict_test_codes: false
+
+database:
+  # Oracle 19c / 21c / 23ai — thin mode, no Oracle Client needed
+  host: "192.168.1.100"
+  port: 1521
+  service_name: "ORCL"          # e.g. ORCL, XEPDB1, FREEPDB1
+  username: "lis_user"
+  password: "CHANGE_ME"
+  schema: "LIS_USER"
+  pool:
+    min: 2
+    max: 10
+    increment: 1
+
+# Map the machine's test code -> your LIS test code.
+# Leave a code out and it is stored as-is.
+test_code_map:
+  WBC: "WBC"
+  RBC: "RBC"
+  HGB: "HB"          # Sysmex sends HGB, the LIS report calls it HB
+  HCT: "HCT"
+  PLT: "PLT"
+  NEUT: "NEUT%"
+  LYMPH: "LYMPH%"
+  GLU: "FBS"         # biochemistry: analyzer GLU -> report FBS
+  CREA: "CREA"
+  ALT: "SGPT"
+  AST: "SGOT"
+
+analyzers:
+  # --- Hematology: Sysmex XN-1000 over TCP/ASTM ----------------------------
+  - name: "Sysmex_XN_1000"
+    brand: "Sysmex"
+    model: "XN-1000"
+    protocol: "ASTM"
+    connection_type: "TCP"
+    host: "0.0.0.0"
+    port: 6661
+    enabled: true
+    # tests this instrument can send; used for validation in strict mode
+    test_codes: ["WBC", "RBC", "HGB", "HCT", "PLT", "NEUT", "LYMPH", "MONO", "EOS", "BASO"]
+
+  # --- Biochemistry: Mindray BS-240 over TCP/HL7 ---------------------------
+  - name: "Mindray_BS240"
+    brand: "Mindray"
+    model: "BS-240"
+    protocol: "HL7"
+    connection_type: "TCP"
+    host: "0.0.0.0"
+    port: 6662
+    enabled: true
+    test_codes: ["GLU", "CREA", "ALT", "AST", "UREA", "CHOL", "TG", "HDL", "LDL", "TBIL"]
+
+  # --- Old Roche over serial RS-232 (7-E-1 like the manual says) ------------
+  - name: "Roche_Cobas_c311"
+    brand: "Roche"
+    model: "Cobas c311"
+    protocol: "ASTM"
+    connection_type: "SERIAL"
+    serial_port: "COM3"          # /dev/ttyS0 on Linux
+    baud_rate: 9600
+    data_bits: 7
+    parity: "EVEN"
+    stop_bits: 1
+    enabled: false               # flip to true once the cable is plugged in
+    test_codes: ["GLU", "CREA", "ALT", "AST", "UREA", "ALP", "TBIL", "DBIL"]
+
+# Rules applied after parsing, before insert
+validation:
+  require_sample_id: true
+  require_result_value: true
+  # Results flagged H/L still get stored; these flags also raise an alert row
+  critical_flags: ["C", "HH", "LL"]
+  # Ignore analyzers that transmit quality-control samples
+  ignore_sample_prefixes: ["QC", "CTRL", "CAL"]

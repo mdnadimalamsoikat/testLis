@@ -1,0 +1,15 @@
+# Core pipeline — enough for a dry run / tests
+PyYAML>=6.0
+oracledb>=2.0.0        # Oracle thin driver: no Oracle Client install needed
+pyserial>=3.5          # only if you use RS-232 (connection_type: SERIAL)
+
+# Browser demo (demo/app.py) — remove if you only deploy the middleware
+fastapi>=0.110
+uvicorn>=0.29
+jinja2>=3.1
+
+# Optional: if you would rather use a ready-made HL7 parser as a reference
+# hl7apy>=1.3.0
+#
+# Optional: if you prefer Mirth Connect instead of this middleware, see
+# docs/DEPLOYMENT.md — the schema and the APEX views stay the same.

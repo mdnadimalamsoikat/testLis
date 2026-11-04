@@ -1,0 +1,35 @@
+# /etc/systemd/system/lis-middleware.service
+# Install:
+#   sudo cp ops/lis-middleware.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now lis-middleware
+# Logs: journalctl -u lis-middleware -f   (or /opt/lis-middleware/logs/lis_service.log)
+#
+# The service reads its configuration from Oracle (lis_config).
+# Editing an analyzer in APEX applies within ~5 seconds — no restart needed.
+[Unit]
+Description=LIS Middleware (ASTM/HL7 → Oracle, configured from APEX)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lis
+Group=lis
+WorkingDirectory=/opt/lis-middleware
+# password comes from the environment file, never from config.yaml
+EnvironmentFile=-/etc/lis-middleware.env
+ExecStart=/opt/lis-middleware/.venv/bin/python /opt/lis-middleware/service.py --mode db
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/lis-middleware/logs
+
+[Install]
+WantedBy=multi-user.target
