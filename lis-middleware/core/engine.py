@@ -47,6 +47,8 @@ class IngestEngine:
         self.test_code_map = test_code_map or {}
         self.known_test_codes = known_test_codes
         self.ignore_sample_prefixes = ignore_sample_prefixes
+        # optional per-analyzer overrides, filled by service.py
+        self.analyzer_code_maps: Dict[str, Dict[str, str]] = {}
         self.history: List[Dict[str, Any]] = []
         self.counters = {"messages": 0, "results": 0, "duplicates": 0, "errors": 0}
 
@@ -76,11 +78,13 @@ class IngestEngine:
             protocol = sniff_protocol(raw)
             entry["detected_protocol"] = protocol
 
+            code_map = dict(self.test_code_map)
+            code_map.update(self.analyzer_code_maps.get(analyzer_name, {}))
             parsed = parse_message(
                 raw,
                 protocol=configured if configured != "AUTO" else "AUTO",
                 analyzer_name=analyzer_name,
-                test_code_map=self.test_code_map,
+                test_code_map=code_map,
             )
             entry["parsed_count"] = len(parsed)
 

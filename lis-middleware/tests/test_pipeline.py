@@ -11,6 +11,7 @@ import sys
 import unittest
 
 import yaml
+from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -287,6 +288,281 @@ class TestE1381Framing(unittest.TestCase):
         leftover = framer.flush()
         self.assertIsNotNone(leftover)
         self.assertIn("MSH", leftover.text)
+
+
+class _FakeCursor:
+    """Minimal cursor stand-in so DatabaseControl can be tested without Oracle."""
+
+    def __init__(self, db):
+        self.db = db
+        self.rows = []
+        self.rowcount = 0
+        self._last_sql = ""
+
+    def execute(self, sql, params=None):
+        self._last_sql = " ".join(sql.split())
+        self.db.executed.append((self._last_sql, params))
+        lowered = self._last_sql.lower()
+        key = next((k for k in self.db.canned if k in lowered), None)
+        self.rows = self.db.canned.get(key, [])
+        self.rowcount = 1 if key else 0
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else (0,)
+
+    def close(self):
+        pass
+
+
+class _FakeDB:
+    schema = "LIS_USER"
+
+    def __init__(self, canned):
+        self.canned = canned
+        self.executed = []
+
+    @contextmanager
+    def cursor(self):
+        cur = _FakeCursor(self)
+        try:
+            yield cur
+        finally:
+            cur.close()
+
+
+class TestApexControl(unittest.TestCase):
+    """The APEX-driven configuration layer."""
+
+    def _db(self):
+        return _FakeDB({
+            "config_type = 'analyzer'": [
+                # name, enabled, protocol, conn, host, port, serial, baud, bits,
+                # parity, stop, brand, model, test_codes, code_map, version
+                ("Sysmex_XN_1000", "Y", "ASTM", "TCP", "0.0.0.0", 6661, None, 9600, 8,
+                 "NONE", 1, "Sysmex", "XN-1000", "WBC,RBC,HGB", '{"HGB":"HB"}', 3),
+            ],
+            "config_type = 'setting'": [
+                ("ACK_MODE", "MLLP"),
+                ("LOG_LEVEL", "DEBUG"),
+                ("IGNORE_SAMPLE_PREFIXES", "QC,CTRL"),
+            ],
+            "lis_test_code_map": [("GLU", "FBS")],
+            "sum(config_version)": [(42, 7, 9)],
+        })
+
+    def test_snapshot_is_built_from_control_tables(self):
+        from database.control import DatabaseControl
+        control = DatabaseControl(self._db())
+        snapshot = control.load_config()
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.source, "database")
+        self.assertEqual(len(snapshot.analyzers), 1)
+        analyzer = snapshot.analyzers[0]
+        self.assertEqual(analyzer.name, "Sysmex_XN_1000")
+        self.assertEqual(analyzer.port, 6661)
+        self.assertEqual(analyzer.test_codes, ["WBC", "RBC", "HGB"])
+        self.assertEqual(analyzer.test_code_map, {"HGB": "HB"})
+        self.assertEqual(snapshot.settings.ack_mode, "MLLP")
+        self.assertEqual(snapshot.settings.ignore_sample_prefixes, ["QC", "CTRL"])
+        self.assertEqual(snapshot.test_code_map, {"GLU": "FBS"})
+        self.assertEqual(snapshot.problems(), [])
+
+    def test_disabled_analyzer_is_not_started(self):
+        from database.control import AnalyzerConfig, ConfigSnapshot
+        snapshot = ConfigSnapshot(analyzers=[
+            AnalyzerConfig(name="A", enabled=True, port=6661),
+            AnalyzerConfig(name="B", enabled=False, port=6662),
+        ])
+        self.assertEqual([a["name"] for a in snapshot.analyzer_dicts()], ["A"])
+
+    def test_duplicate_ports_are_refused(self):
+        from database.control import AnalyzerConfig, ConfigSnapshot
+        snapshot = ConfigSnapshot(analyzers=[
+            AnalyzerConfig(name="A", port=6661),
+            AnalyzerConfig(name="B", port=6661),
+        ])
+        problems = snapshot.problems()
+        self.assertTrue(any("used by both" in p for p in problems))
+
+    def test_bad_values_are_refused_with_a_readable_message(self):
+        from database.control import AnalyzerConfig
+        problems = AnalyzerConfig(name="A", protocol="XYZ", port=80).validate()
+        self.assertTrue(any("protocol" in p for p in problems))
+        self.assertTrue(any("port" in p for p in problems))
+
+    def test_serial_analyzer_needs_a_port(self):
+        from database.control import AnalyzerConfig
+        problems = AnalyzerConfig(name="A", transport="SERIAL", port=0).validate()
+        self.assertTrue(any("serial_port" in p for p in problems))
+
+    def test_fingerprint_ignores_bookkeeping_columns(self):
+        """applied_at is written by the service; it must not look like an edit."""
+        from database.control import DatabaseControl
+        db = _FakeDB({})
+        DatabaseControl(db).config_version()
+        sql = db.executed[0][0]
+        self.assertNotIn("applied_at", sql.lower())
+        self.assertIn("config_version", sql.lower())
+
+    def test_service_does_not_reload_on_its_own_ticks(self):
+        """Two consecutive fingerprints must be equal when nothing was edited."""
+        from database.control import DatabaseControl
+        db = _FakeDB({"sum(config_version)": [(42, 7, 9)]})
+        control = DatabaseControl(db)
+        self.assertEqual(control.config_version(), control.config_version())
+
+    def test_commands_are_claimed_once(self):
+        from database.control import DatabaseControl
+        db = _FakeDB({"status = 'pending'": [(11, "reload", None, None)]})
+        control = DatabaseControl(db)
+        claimed = control.claim_commands()
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["command_type"], "RELOAD")
+        # it must have been marked RUNNING inside the same transaction
+        self.assertTrue(any(sql.lower().startswith("update lis_user.lis_commands") or
+                            "status = 'running'" in sql.lower() for sql, _ in db.executed))
+
+    def test_file_control_still_works(self):
+        from database.control import FileControl
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "config", "config.yaml")
+        control = FileControl(config_path)
+        snapshot = control.load_config()
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.source, "file")
+        self.assertGreaterEqual(len(snapshot.analyzers), 2)
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+class _SupervisorControl:
+    """Stands in for the Oracle control tables: gives service.py a snapshot."""
+
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.applied = []
+        self.errors = []
+        self.statuses = []
+
+    def load_config(self):
+        return self.snapshot
+
+    def config_version(self):
+        return self.snapshot.version if self.snapshot else ""
+
+    def mark_applied(self, version, by):
+        self.applied.append(version)
+
+    def set_last_error(self, message, analyzer=None):
+        self.errors.append(message)
+
+    def write_status(self, statuses):
+        self.statuses = statuses
+
+    def claim_commands(self, limit=5):
+        return []
+
+    def finish_command(self, command_id, ok, message=""):
+        pass
+
+    def insert_audit(self, event, analyzer, detail):
+        pass
+
+
+class TestSupervisorHotReload(unittest.IsolatedAsyncioTestCase):
+    """The promise: an APEX edit applies without a restart, and only to what changed."""
+
+    def _snapshot(self, analyzers, protocol="ASTM", version="1"):
+        from database.control import AnalyzerConfig, ConfigSnapshot, RuntimeSettings
+        return ConfigSnapshot(analyzers=analyzers, settings=RuntimeSettings(),
+                              version=version, source="database")
+
+    async def asyncSetUp(self):
+        import service
+        from database.memory_store import MemoryStore
+        self.service = service
+        self.store = MemoryStore()
+
+    async def test_only_the_changed_listener_is_restarted(self):
+        from database.control import AnalyzerConfig
+        port_a, port_b = _free_port(), _free_port()
+        first = self._snapshot([AnalyzerConfig(name="A", port=port_a)], version="1")
+        control = _SupervisorControl(first)
+        sup = self.service.Supervisor(control, lambda: self.store, dry_run=True)
+        await sup.start()
+        listener_a = sup.listeners["A"]
+        self.assertTrue(listener_a.status()["running"])
+
+        second = self._snapshot([AnalyzerConfig(name="A", port=port_a),
+                                 AnalyzerConfig(name="B", port=port_b)], version="2")
+        control.snapshot = second
+        result = await sup.reload(triggered_by="test")
+
+        self.assertTrue(result["ok"], result)
+        self.assertIs(sup.listeners["A"], listener_a)      # A untouched
+        self.assertIn("B", sup.listeners)
+        self.assertEqual(control.applied[-1], "2")
+        await sup.shutdown()
+
+    async def test_changing_a_port_moves_the_listener(self):
+        from database.control import AnalyzerConfig
+        old_port, new_port = _free_port(), _free_port()
+        control = _SupervisorControl(self._snapshot([AnalyzerConfig(name="A", port=old_port)]))
+        sup = self.service.Supervisor(control, lambda: self.store, dry_run=True)
+        await sup.start()
+
+        control.snapshot = self._snapshot([AnalyzerConfig(name="A", port=new_port)], version="2")
+        await sup.reload(triggered_by="test")
+
+        self.assertEqual(sup.listeners["A"].port, new_port)
+        self.assertTrue(sup.listeners["A"].status()["running"])
+        await sup.shutdown()
+
+    async def test_an_invalid_row_is_refused_and_the_old_config_keeps_running(self):
+        from database.control import AnalyzerConfig
+        port = _free_port()
+        control = _SupervisorControl(self._snapshot([AnalyzerConfig(name="A", port=port)]))
+        sup = self.service.Supervisor(control, lambda: self.store, dry_run=True)
+        await sup.start()
+
+        control.snapshot = self._snapshot([AnalyzerConfig(name="A", port=port, protocol="XYZ")],
+                                          version="2")
+        result = await sup.reload(triggered_by="test")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("protocol", result["message"])
+        self.assertTrue(control.errors)                      # written back to APEX
+        self.assertEqual(sup.listeners["A"].port, port)       # still the working one
+        self.assertTrue(sup.listeners["A"].status()["running"])
+        await sup.shutdown()
+
+    async def test_selftest_runs_through_the_live_engine(self):
+        from database.control import AnalyzerConfig
+        control = _SupervisorControl(self._snapshot([AnalyzerConfig(name="A", port=_free_port())]))
+        sup = self.service.Supervisor(control, lambda: self.store, dry_run=True)
+        await sup.start()
+        ok, message = await sup._selftest("A", "astm_cbc_normal")
+        self.assertTrue(ok, message)
+        self.assertIn("stored", message)
+        await sup.shutdown()
+
+    async def test_heartbeat_reports_every_listener(self):
+        from database.control import AnalyzerConfig
+        control = _SupervisorControl(self._snapshot([AnalyzerConfig(name="A", port=_free_port())]))
+        sup = self.service.Supervisor(control, lambda: self.store, dry_run=True)
+        await sup.start()
+        await sup.tick()
+        self.assertEqual([s["name"] for s in control.statuses], ["A"])
+        self.assertTrue(control.statuses[0]["running"])
+        await sup.shutdown()
 
 
 if __name__ == "__main__":

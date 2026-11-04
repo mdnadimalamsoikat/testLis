@@ -57,13 +57,20 @@ CREATE TABLE lis_audit_log (
 );
 
 -- 4. Analyzer heartbeat, useful on the APEX status page.
+--    The service writes this every few seconds (see service.py) so APEX can
+--    show ONLINE / STOPPED and the last message time without asking Python.
 CREATE TABLE lis_analyzer_status (
-    analyzer_name   VARCHAR2(100) PRIMARY KEY,
-    protocol        VARCHAR2(10),
-    connection_type VARCHAR2(20),
-    last_seen_at    TIMESTAMP,
-    messages_today  NUMBER DEFAULT 0,
-    state           VARCHAR2(20) DEFAULT 'UNKNOWN'
+    analyzer_name      VARCHAR2(100) PRIMARY KEY,
+    protocol           VARCHAR2(10),
+    connection_type    VARCHAR2(20),
+    host               VARCHAR2(120),
+    port               NUMBER,
+    active_connections NUMBER DEFAULT 0,
+    messages_received  NUMBER DEFAULT 0,
+    messages_today     NUMBER DEFAULT 0,
+    last_message_at    TIMESTAMP,
+    last_seen_at       TIMESTAMP,
+    state              VARCHAR2(20) DEFAULT 'UNKNOWN'
 );
 
 -- ---------------------------------------------------------------------------

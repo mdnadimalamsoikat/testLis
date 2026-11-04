@@ -21,10 +21,11 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 |---|---|
 | [`lis-middleware/`](lis-middleware/) | The working Python middleware — listeners, ASTM/HL7 parsers, validator, Oracle writer, mock analyzer, tests |
 | [`lis-middleware/demo/`](lis-middleware/demo/) | Browser demo: send a message, watch parse → validate → store → ACK |
-| [`docs/PROJECT_GUIDE_BN.pdf`](docs/PROJECT_GUIDE_BN.pdf) | 10-page Bengali guide: architecture, schema, APEX, setup, deploy, troubleshooting |
+| [`docs/PROJECT_GUIDE_BN.pdf`](docs/PROJECT_GUIDE_BN.pdf) | 15-page Bengali guide: architecture, schema, APEX reports **and the APEX control panel**, setup, deploy, troubleshooting |
 | [`docs/CODE_WALKTHROUGH.pdf`](docs/CODE_WALKTHROUGH.pdf) | The same pipeline explained code-first, with the real functions |
 | [`docs/REAL_DEVICE.md`](docs/REAL_DEVICE.md) | Honest guide: demo vs real analyzer, wire-level simulation, capturing the real machine's bytes (Bangla) |
 | [`docs/LAB_DAY.md`](docs/LAB_DAY.md) | **Start here for the real thing** — 3-day plan (simulate → rehearse → lab), every machine setting you must change, other simulators, rollback (Bangla) |
+| [`docs/APEX_CONTROL.md`](docs/APEX_CONTROL.md) | **The lab never sees Python** — install the control tables, build the two APEX pages, every field's rules, who-sees-what (Bangla) |
 
 ## 60-second start (no Oracle needed)
 
@@ -32,7 +33,7 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 cd lis-middleware
 pip install -r requirements.txt
 
-python -m unittest discover -s tests -v     # 36 tests, no DB
+python -m unittest discover -s tests -v     # 50 tests, no DB
 python -m demo.app                          # http://localhost:8080
 ```
 
@@ -50,6 +51,24 @@ python tools/device_sim.py -s astm_cbc_normal -p 6661 --trace
 `device_sim` can also inject the faults a real cable produces
 (`--fault checksum|noise|drop`), and `tools/sniff_com.py` captures **your**
 analyzer's own bytes so you test against the machine, not against samples.
+
+## Who touches what
+
+| Role | Sees | Never sees |
+|---|---|---|
+| Lab in-charge | APEX: analyzers online/offline, today's results, critical alerts | the server, files, logs |
+| Technician | APEX: analyzer list, a `Selftest` button | Python, a command line |
+| IT (you) | everything | — |
+
+Adding an analyzer, changing a port or turning one off is a **row edited in
+APEX** — the service applies it in ~5 s, restarts only the affected listener and
+writes back `applied` or `last_error`. A mistyped port never reaches a live
+socket. Setup: [`docs/APEX_CONTROL.md`](docs/APEX_CONTROL.md).
+
+```bash
+sqlplus lis_user/password@//192.168.1.100:1521/ORCL @lis-middleware/database/apex_install.sql
+python lis-middleware/service.py        # APEX-driven, hot reload (service.py, not main.py)
+```
 
 ## For the real lab
 

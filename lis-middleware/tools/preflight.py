@@ -201,6 +201,8 @@ def check_database(config: Dict[str, Any]) -> None:
 
     record(PASS, "oracle", f"connected as {db_obj.username} to {db_obj.dsn}")
     schema = db_obj.schema
+    global _ORACLE
+    _ORACLE = db_obj
     try:
         with db_obj.cursor() as cur:
             cur.execute("SELECT table_name FROM all_tables WHERE owner = :o", {"o": schema})
@@ -224,14 +226,16 @@ def check_database(config: Dict[str, Any]) -> None:
         record(PASS, "oracle", f"lab_results currently holds {count} row(s)")
     except Exception as exc:
         record(FAIL, "oracle", f"schema check failed: {str(exc)[:120]}", "check grants and schema name")
-    finally:
         db_obj.close()
+        _ORACLE = None
 
 
 def check_apm_notes() -> None:
     """Things a script cannot verify but that ruin the day if forgotten."""
-    record(WARN, "manual", "analyzer IP + port must match config.yaml (verify at the machine)",
+    record(WARN, "manual", "analyzer IP + port must match the APEX analyzer row (verify at the machine)",
            "see docs/LAB_DAY.md → machine settings table")
+    record(WARN, "manual", "the lab should only ever touch APEX, never the server",
+           "open docs/APEX_CONTROL.md §6 (who sees what)")
     record(WARN, "manual", "firewall must allow the analyzer→middleware port",
            'New-NetFirewallRule -DisplayName "LIS" -Direction Inbound -LocalPort 6661 -Protocol TCP -Action Allow')
 
@@ -263,6 +267,62 @@ def print_report() -> int:
     return 0
 
 
+_ORACLE = None
+
+
+def check_apex(db, config: dict) -> list:
+    """APEX control tables — the layer that lets the lab run everything itself."""
+    rows = []
+    required = ("LIS_CONFIG", "LIS_TEST_CODE_MAP", "LIS_COMMANDS", "LIS_ANALYZER_STATUS")
+    try:
+        with db.cursor() as cur:
+            for table in required:
+                cur.execute(
+                    "SELECT COUNT(*) FROM all_tables WHERE owner = :o AND table_name = :t",
+                    {"o": db.schema, "t": table},
+                )
+                found = bool(cur.fetchone()[0])
+                rows.append((
+                    "pass" if found else "fail",
+                    f"APEX table {table}",
+                    "exists" if found else "missing — run database/apex_install.sql",
+                ))
+            if not all(r[0] == "pass" for r in rows):
+                return rows
+
+            cur.execute(f"SELECT COUNT(*) FROM {db.schema}.lis_config "
+                        f"WHERE config_type = 'ANALYZER' AND status = 'ACTIVE'")
+            analyzers = cur.fetchone()[0]
+            rows.append(("pass" if analyzers else "fail", "APEX analyzers configured",
+                         f"{analyzers} active"))
+
+            cur.execute(f"SELECT analyzer_name, protocol, port FROM {db.schema}.lis_config "
+                        f"WHERE config_type = 'ANALYZER' AND status = 'ACTIVE' AND enabled = 'Y'")
+            ports = {}
+            for name, protocol, port in cur.fetchall():
+                rows.append(("pass", f"  · {name}", f"{protocol} port {port}"))
+                ports.setdefault(port, []).append(name)
+            for port, names in ports.items():
+                if len(names) > 1:
+                    rows.append(("fail", f"port {port} duplicated", ", ".join(names)))
+
+            cur.execute(f"SELECT COUNT(*) FROM {db.schema}.lis_config WHERE last_error IS NOT NULL")
+            errors = cur.fetchone()[0]
+            rows.append(("warn", "APEX last_error rows", f"{errors} row(s) rejected") if errors
+                        else ("pass", "APEX last_error rows", "none"))
+
+            cur.execute(f"SELECT COUNT(*) FROM {db.schema}.lis_analyzer_status "
+                        f"WHERE last_seen_at > SYSTIMESTAMP - INTERVAL '2' MINUTE")
+            hearing = cur.fetchone()[0]
+            rows.append(("pass", "middleware heartbeat", f"{hearing} analyzer(s) seen in last 2 min")
+                        if hearing else
+                        ("warn", "middleware heartbeat",
+                         "no heartbeat in 2 min — is service.py running?"))
+    except Exception as exc:
+        rows.append(("warn", "APEX control tables", f"could not check: {exc}"))
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pre-flight checks for the LIS middleware")
     parser.add_argument("--config", default=str(ROOT / "config" / "config.yaml"))
@@ -278,6 +338,13 @@ def main() -> int:
         check_ports_free(config)
         if not args.offline:
             check_database(config)
+            if _ORACLE is not None:
+                try:
+                    for status, area, message in check_apex(_ORACLE, config):
+                        record(status, area, message)
+                finally:
+                    _ORACLE.close()
+                    _ORACLE = None
         else:
             record(WARN, "oracle", "database checks skipped (--offline)", "run again without --offline")
     check_logs()

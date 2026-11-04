@@ -142,11 +142,11 @@ def main() -> None:
     doc.code(snippet("listeners/tcp_listener.py", "    def _extract", 42))
 
     section(doc, "10 · Proving it works", "tests/test_pipeline.py")
-    doc.para("Thirty-six tests cover the parsers, the sniffer, the validator, de-duplication, "
+    doc.para("Fifty tests cover the parsers, the sniffer, the validator, de-duplication, "
              "the ACK modes and the error paths. No Oracle, no sockets, no lab instrument needed.")
     doc.code("python -m unittest discover -s tests -v\n"
              "  ...\n"
-             "  Ran 36 tests in 0.006s\n"
+             "  Ran 50 tests in 0.068s\n"
              "  OK", caption="test run")
     doc.code(snippet("tests/test_pipeline.py", "    def test_end_to_end_astm", 12))
 
@@ -164,6 +164,35 @@ def main() -> None:
         "       --tap 127.0.0.1:6661 --out logs/capture.jsonl\n"
         "python tools/replay_capture.py logs/capture.jsonl --port 6661 --timing",
         caption="three levels of realism: simulate → capture → replay")
+
+    section(doc, "12 · APEX-driven control plane", "database/control.py, service.py")
+    doc.para("The lab must never edit a file or open a terminal. Configuration therefore lives in "
+             "Oracle tables and is edited on APEX pages; `service.py` is a supervisor that polls those "
+             "tables and applies the difference. `DatabaseControl` reads `lis_config` into a "
+             "`ConfigSnapshot`, refuses anything invalid, claims `lis_commands` atomically and writes "
+             "the heartbeat back. `FileControl` implements the same interface over `config.yaml`, so "
+             "the same code path runs in the demo (`--mode file`).")
+    doc.code(snippet("database/control.py", "    def config_version", 18))
+    doc.para("The fingerprint deliberately ignores `applied_at`: the service writes that column itself, "
+             "and a fingerprint that included it would make the service reload on every single tick.")
+    doc.code(snippet("service.py", "    async def _apply", 40))
+    doc.para("Only listeners whose settings actually changed are stopped and restarted; unchanged ports "
+             "keep their connections, so an operator editing one analyzer never drops another one's "
+             "session. A listener that cannot bind its port reports the error instead of dying silently.")
+    doc.code(snippet("service.py", "    async def _run_command", 30))
+    doc.para("Commands come from the same poll: a `RELOAD`, `START`, `STOP`, `RESTART`, `SELFTEST` or "
+             "`PING` row is claimed with `status = 'RUNNING'`, executed, and closed with "
+             "`DONE`/`FAILED` plus a human-readable `result_message` that APEX shows next to the button.")
+    doc.table(["Table", "Written by", "Read by"],
+              [["lis_config", "APEX form", "service (every 5 s)"],
+               ["lis_test_code_map", "APEX form", "service"],
+               ["lis_commands", "APEX button", "service (claims, then closes)"],
+               ["lis_analyzer_status", "service (heartbeat)", "APEX dashboard"],
+               ["lab_results / lis_raw_messages", "service (pipeline)", "APEX reports"]],
+              widths=[150, 130, 195], size=8.6)
+    doc.callout("Deployment", "`ops/install_service_windows.ps1` (NSSM, auto-restart) and "
+                "`ops/lis-middleware.service` (systemd) both run `service.py`, i.e. APEX mode with hot "
+                "reload. `python main.py` stays the developer entry point.", kind="info")
 
     doc.space(6)
     doc.callout("Where to start reading", "Follow the order of this document: main.py → engine.py → "

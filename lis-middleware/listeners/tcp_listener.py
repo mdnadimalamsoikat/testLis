@@ -50,18 +50,35 @@ class TCPListener:
         self.port = int(analyzer.get("port", port))
         self.name = analyzer.get("name", f"TCP:{self.port}")
         self._server: Optional[asyncio.AbstractServer] = None
+        self._ready = asyncio.Event()
+        self._task: Optional[asyncio.Task] = None
         self._connections = 0
         self.last_message_at: Optional[str] = None
         self.messages_received = 0
 
     # ------------------------------------------------------------------ public
-    async def start(self) -> None:
+    async def serve(self) -> None:
+        """Bind the port and keep serving until stop() is called."""
         self._server = await asyncio.start_server(
             self._on_client, self.host, self.port, reuse_address=True
         )
         logger.info("%-22s | TCP | listening on %s:%s", self.name, self.host, self.port)
+        self._ready.set()
         async with self._server:
             await self._server.serve_forever()
+
+    async def start(self) -> None:
+        """Backwards-compatible alias used by main.py."""
+        await self.serve()
+
+    async def start_background(self) -> asyncio.Task:
+        """Run serve() as a task and wait until the port is actually bound."""
+        task = asyncio.create_task(self.serve(), name=self.name)
+        try:
+            await asyncio.wait_for(self._ready.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            logger.error("%s: port %s did not open", self.name, self.port)
+        return task
 
     async def stop(self) -> None:
         if self._server is not None:

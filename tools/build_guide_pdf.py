@@ -50,6 +50,7 @@ def cover(doc: Document) -> None:
         ["স্তর", "বিস্তারিত"],
         ["Frontend", "Oracle APEX — রিপোর্ট, ড্যাশবোর্ড, critical alert"],
         ["Database", "Oracle 19c / 21c / 23ai — thin mode, কোনো Oracle Client দরকার নেই"],
+        ["নিয়ন্ত্রণ", "সব কনফিগ APEX পেজ থেকে — Python সার্ভারে কেউ ঢুকবে না"],
         ["Middleware", "Python 3.10+ — ASTM ও HL7 parser, TCP ও Serial listener"],
         ["Analyzer", "Sysmex XN (ASTM/TCP), Mindray BS-240 (HL7/TCP), Roche Cobas (ASTM/Serial)"],
         ["ডেমো", "ব্রাউজারে চলা mock analyzer — real machine ছাড়াই পুরো flow টেস্ট করা যায়"],
@@ -59,7 +60,7 @@ def cover(doc: Document) -> None:
     doc.space(2)
     doc.callout("এই ডকুমেন্টে যা পাবেন",
                 "1) কেন middleware লাগে  2) পুরো আর্কিটেকচার  3) ফাইল ও কোড  4) ডেটাবেস স্কিমা  "
-                "5) APEX রিপোর্ট  6) সেটআপ ধাপে ধাপে  7) টেস্ট ও মক অ্যানালাইজার  "
+                "5) APEX রিপোর্ট ও APEX-চালিত কন্ট্রোল  6) সেটআপ ধাপে ধাপে  7) টেস্ট ও মক অ্যানালাইজার  "
                 "8) ডিপ্লয়মেন্ট  9) সমস্যা ও সমাধান  10) চেকলিস্ট", kind="info")
 
     doc.space(10)
@@ -69,9 +70,9 @@ def cover(doc: Document) -> None:
         ["২", "আর্কিটেকচার", "পাঁচ স্তর, প্রতিটির দায়িত্ব"],
         ["৩", "কোড", "ASTM/HL7 ফরম্যাট, pipeline, ACK, ডুপ্লিকেট"],
         ["৪", "ডেটাবেস স্কিমা", "টেবিল, ইনডেক্স, APEX ভিউ"],
-        ["৫", "Oracle APEX", "রিপোর্ট, ফর্ম, critical alert"],
+        ["৫", "Oracle APEX", "রিপোর্ট, ফর্ম, critical alert + APEX থেকে সব নিয়ন্ত্রণ"],
         ["৬", "সেটআপ ও ল্যাব ডে", "স্কিমা → config → preflight → মেশিন সেটিং → ল্যাবের ক্রম"],
-        ["৭", "টেস্ট", "৩৬টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
+        ["৭", "টেস্ট", "৫০টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
         ["৮", "ডিপ্লয়মেন্ট", "Windows সার্ভিস, Linux systemd"],
         ["৯", "সমস্যা ও সমাধান", "লক্ষণ → কারণ → সমাধান"],
         ["১০", "চেকলিস্ট", "প্রোডাকশনে যাওয়ার আগে"],
@@ -166,8 +167,9 @@ def section_code(doc: Document) -> None:
     doc.h2("প্রজেক্ট স্ট্রাকচার", "৩.১")
     doc.code(
         "lis-middleware/\n"
-        "├── main.py                  # entry point: start every listener\n"
-        "├── config/config.yaml       # DB password, analyzer list, code map\n"
+        "├── service.py               # production: APEX-driven + hot reload\n"
+        "├── main.py                  # dev: start every listener once\n"
+        "├── config/config.yaml       # DB host/user, log level, fallback list\n"
         "├── core/\n"
         "│   ├── engine.py            # raw → parse → validate → insert → ACK\n"
         "│   ├── parser_factory.py    # protocol sniff + parser selection\n"
@@ -175,11 +177,14 @@ def section_code(doc: Document) -> None:
         "│   └── ack_handler.py       # ASTM 0x06 ACK / MLLP ACK builder\n"
         "├── parsers/{astm_parser,hl7_parser}.py\n"
         "├── listeners/{tcp_listener,serial_listener}.py\n"
-        "├── database/{db_connection,db_writer,memory_store}.py + schema.sql\n"
+        "├── database/{db_connection,db_writer,control}.py\n"
+        "│   + schema.sql            # results tables\n"
+        "│   + apex_install.sql      # APEX control plane (lis_config ...)\n"
         "├── demo/app.py             # browser demo (same engine)\n"
-        "├── tools/{mock_analyzer,replay}.py\n"
+        "├── ops/                    # systemd / NSSM service installers\n"
+        "├── tools/{device_sim,preflight,sniff_com,replay_capture}.py\n"
         "├── samples/messages.yaml   # real-shaped ASTM / HL7 payloads\n"
-        "└── tests/test_pipeline.py  # 26 tests, no Oracle needed"
+        "└── tests/test_pipeline.py  # 50 tests, no Oracle needed"
     )
 
     doc.h2("ASTM মানে কী — এক নজরে", "৩.২")
@@ -347,6 +352,110 @@ def section_apex(doc: Document) -> None:
                 "abnormal_flag-এ Highlight রঙ দিলে H/L চোখে পড়ে।", kind="info")
 
 
+    doc.h2("সব নিয়ন্ত্রণ APEX থেকে — ল্যাব কখনো সার্ভারে ঢুকবে না", "৫.৬")
+
+    doc.para("উপরের রিপোর্টগুলো শুধু **দেখার** অংশ। কিন্তু আসল প্রশ্নটা হলো: অ্যানালাইজার যোগ করা, "
+             "পোর্ট বদলানো, একটা মেশিন সাময়িক বন্ধ করা — এসব **কে** করবে? প্রচলিত উত্তর: সার্ভারে গিয়ে "
+             "`config.yaml` এডিট, তারপর সার্ভিস রিস্টার্ট। এতে তিনটি সমস্যা: (ক) ল্যাবের লোক সার্ভারে "
+             "ঢুকতে চায় না, ঢোকা উচিতও নয়; (খ) কে কখন কী বদলেছে তার হিসাব থাকে না; (গ) একটা অক্ষর "
+             "ভুল হলে পুরো সার্ভিস বন্ধ, অথচ অ্যানালাইজার তখনো নমুনা পাঠাচ্ছে।")
+
+    doc.para("তাই এই ডিজাইনে **Oracle টেবিলই একমাত্র সত্য**। APEX পেজ শুধু ওই টেবিলের ফর্ম; Python "
+             "সার্ভিস প্রতি ৫ সেকেন্ডে টেবিল পড়ে বদলটা নিজে থেকে প্রয়োগ করে, আর সফল/ব্যর্থতা টেবিলেই "
+             "ফিরিয়ে লেখে।")
+
+    doc.code(
+        "APEX form (lab staff)\n"
+        "      |  INSERT / UPDATE\n"
+        "      v\n"
+        "  lis_config / lis_commands          <-- the only interface\n"
+        "      |  poll every 5 s\n"
+        "      v\n"
+        "  service.py  ->  apply diff  ->  restart ONLY the changed listener\n"
+        "      |\n"
+        "      +-->  lis_analyzer_status (ONLINE, last message)\n"
+        "      +-->  lis_config.last_applied_at / last_error  --> green tick in APEX"
+    )
+
+    doc.h2("একবারের ইনস্টল", "৫.৬.১")
+    doc.numbered([
+        "`sqlplus lis_user/pass@//host:1521/ORCL @database/schema.sql` — রেজাল্ট টেবিল ও ভিউ।",
+        "`sqlplus lis_user/pass@//host:1521/ORCL @database/apex_install.sql` — কন্ট্রোল টেবিল "
+        "(`lis_config`, `lis_test_code_map`, `lis_commands`, `lis_analyzer_status`), APEX-এর ভিউ "
+        "(`v_lis_analyzers`, `v_lis_settings`, `v_lis_health`, `v_lis_command_log`) এবং তিনটি "
+        "ডেমো অ্যানালাইজার + পাঁচটি সেটিং সিড।",
+        "APEX-এ পেজ বানান (`docs/APEX_CONTROL.md` §২-এ প্রতিটি ফিল্ড, LOV আর নিয়ম লেখা আছে)।",
+        "সার্ভারে সার্ভিস ইনস্টল করুন — `ops/` ফোল্ডারের স্ক্রিপ্ট, নিচে দেখুন।",
+    ])
+
+    doc.h2("APEX পেজ ম্যাপ", "৫.৬.২")
+    doc.table(["#", "পেজ", "Region source", "কাজ"],
+              [["১", "অ্যানালাইজার", "v_lis_analyzers", "তালিকা: অনলাইন/অফলাইন, শেষ মেসেজ"],
+               ["২", "অ্যানালাইজার ফর্ম", "lis_config", "পোর্ট, প্রোটোকল, সিরিয়াল সেটিং"],
+               ["৩", "সেটিংস", "v_lis_settings", "ACK mode, log level, QC prefix"],
+               ["৪", "টেস্ট কোড ম্যাপ", "lis_test_code_map", "মেশিনের কোড → রিপোর্ট কোড"],
+               ["৫", "কন্ট্রোল বাটন", "lis_commands", "Reload / Start / Stop / Restart / Selftest"],
+               ["৬", "হেলথ ড্যাশবোর্ড", "v_lis_health", "কত অনলাইন, আজ কত রেজাল্ট, কত ক্রিটিক্যাল"]],
+              widths=[26, 105, 118, 226], size=8.4)
+
+    doc.h2("ফর্মে যে নিয়মগুলো বসাবেন", "৫.৬.৩")
+    doc.table(["ফিল্ড", "নিয়ম", "কেন"],
+              [["analyzer_name", "Required, Unique, এডিটে Read Only", "নাম বদলালে হিস্টোরি ভেঙে যায়"],
+               ["protocol", "LOV: ASTM / HL7 / AUTO", "ভুল প্রোটোকল = কোনো রেজাল্ট না"],
+               ["connection_type", "LOV: TCP / SERIAL", "সিরিয়ালে পোর্ট নম্বর লাগে না"],
+               ["port", "1024–65535, TCP হলে Required", "ভুল পোর্টে অ্যানালাইজার connect করতে পারবে না"],
+               ["serial_port", "SERIAL হলে Required (COM3)", "নাহলে পোর্ট খোলা যায় না"],
+               ["enabled", "Switch Y/N", "বন্ধ = শুধু লিসেনার উঠে যায়, ডেটা থাকে"],
+               ["status", "ডিফল্ট DRAFT, শেষে ACTIVE", "অর্ধেক লেখা পোর্ট কখনো লাইভ হবে না"]],
+              widths=[92, 175, 208], size=8.4)
+
+    doc.callout("DRAFT কেন এত জরুরি",
+                "নতুন অ্যানালাইজার যোগ করার সময় সার্ভিস শুধু `status = 'ACTIVE'` রো পড়ে। তাই আগে "
+                "DRAFT-এ সব লিখে ফেলুন, মেশিনের Host সেটিং মিলিয়ে নিন, তারপর ACTIVE করুন — তখনই "
+                "পোর্ট খুলবে। এডিটের সময়ও একই নিয়ম: DRAFT → বদলান → ACTIVE।",
+                kind="warn")
+
+    doc.h2("বাটনগুলো (lis_commands)", "৫.৬.৪")
+    doc.table(["বাটন", "কাজ", "কখন"],
+              [["RELOAD", "সব রো নতুন করে পড়ে, শুধু বদলানোটা রিস্টার্ট", "কিছু apply না হলে"],
+               ["START / STOP", "একটা অ্যানালাইজার চালু / বন্ধ", "সার্ভিসিং বা ভুল করে বন্ধ"],
+               ["RESTART", "বন্ধ করে চালু", "পোর্ট আটকে গেলে"],
+               ["SELFTEST", "ভেতরের নমুনা দিয়ে টেস্ট, ডেটাবেসে লেখে না", "নতুন মেশিন যোগ করার পর"],
+               ["PING", "সার্ভিস জীবিত কি না", "সন্দেহ হলে"]],
+              widths=[78, 205, 192], size=8.4)
+
+    doc.para("`SELFTEST`-এর ফলাফল ওই কমান্ড রো-এর `result_message`-এ ফিরে আসে, যেমন — "
+             "`astm_cbc_normal: HALF_ACCEPTED, 4 stored, ack=ASTM (E1381 checksum ok)`। "
+             "ফলে আসল মেশিনে হাত দেওয়ার আগেই বোঝা যায় পার্সিং আর স্টোরেজ ঠিক আছে।", size=9)
+
+    doc.h2("সার্ভিস ইনস্টল (একবার)", "৫.৬.৫")
+    doc.code(
+        "# Windows (Administrator PowerShell) — NSSM, auto-restart, password in machine env\n"
+        ".\\ops\\install_service_windows.ps1 -ProjectDir \"C:\\lis\\lis-middleware\"\n"
+        "nssm status LISMiddleware\n\n"
+        "# Linux — systemd unit already in ops/\n"
+        "sudo cp ops/lis-middleware.service /etc/systemd/system/\n"
+        "sudo install -m 600 ops/lis-middleware.env.example /etc/lis-middleware.env   # DB password\n"
+        "sudo systemctl enable --now lis-middleware\n"
+        "journalctl -u lis-middleware -f"
+    )
+
+    doc.para("`config/config.yaml`-এ এখন শুধু ডেটাবেসের ঠিকানা (host / service_name / username), "
+             "লগ-লেভেল আর ফলব্যাক তালিকা থাকে; পাসওয়ার্ড থাকে সার্ভিসের environment-এ। অ্যানালাইজার, "
+             "পোর্ট, প্রোটোকল, টেস্ট কোড ম্যাপ — সব ডেটাবেসে।", size=9)
+
+    doc.h2("ভুল হলে কী হয়", "৫.৬.৬")
+    doc.table(["পরিস্থিতি", "সার্ভিসের প্রতিক্রিয়া", "APEX-এ যা দেখবেন"],
+              [["পোর্ট ৮০ লিখেছেন", "প্রয়োগ করে না, আগের কনফিগ চালু থাকে", "last_error = port outside 1024-65535"],
+               ["দুই মেশিন একই পোর্টে", "প্রয়োগ করে না", "last_error = port 6661 used by both A and B"],
+               ["পোর্ট অন্য প্রোগ্রাম ধরে আছে", "শুধু ওই লিসেনার উঠবে না", "state = STOPPED + cannot open port"],
+               ["সব ঠিক", "শুধু বদলানো লিসেনার রিস্টার্ট", "সবুজ applied tick, state = ONLINE"],
+               ["সার্ভিস বন্ধ", "—", "heartbeat পুরোনো, preflight ⚠️ দেখাবে"]],
+              widths=[120, 175, 180], size=8.4)
+
+    doc.para("নিয়মটা সহজ: **ভুল কনফিগ কখনো চলতি কনফিগকে ভাঙে না।** মেসেজ আসতে থাকে, রেজাল্ট জমতে "
+             "থাকে, শুধু লাল লেখাটা অপারেটরকে জানায় কী ঠিক করতে হবে।", size=9)
+
 def section_setup(doc: Document) -> None:
     doc.h1("সেটআপ — ধাপে ধাপে", "বিভাগ ৬")
 
@@ -443,7 +552,7 @@ def section_test(doc: Document) -> None:
 
     doc.h2("ইউনিট টেস্ট — Oracle ছাড়াই", "৭.১")
     doc.code("python -m unittest discover -s tests -v\n"
-             "# 36 tests — ASTM, HL7, E1381 framing, validator, dedupe, ACK")
+             "# 50 tests — ASTM, HL7, E1381 framing, validator, dedupe, ACK, hot reload")
     doc.para("টেস্টগুলো আসল ফরম্যাটের নমুনা দিয়ে চলে (samples/messages.yaml), তাই parser "
              "বদলালে সাথে সাথেই বোঝা যায় কিছু ভেঙেছে কি না।")
 

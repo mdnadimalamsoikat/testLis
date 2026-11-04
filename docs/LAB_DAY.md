@@ -11,7 +11,7 @@
 
 | কবে | কোথায় | কী করবেন | সফলতার মাপকাঠি |
 |---|---|---|---|
-| **আজ (২-৩ ঘণ্টা)** | ঘরে | আসল মেশিনের মতো simulator চালিয়ে সব ফরম্যাট/ফল্ট টেস্ট | `device_sim` ✅ + ৩৬ টেস্ট পাস |
+| **আজ (২-৩ ঘণ্টা)** | ঘরে | আসল মেশিনের মতো simulator চালিয়ে সব ফরম্যাট/ফল্ট টেস্ট | `device_sim` ✅ + ৫০ টেস্ট পাস |
 | **কাল (২ ঘণ্টা)** | ঘরে | আপনার DB-তে `schema.sql`, `preflight`, `--dry-run` ছাড়া আসল ইনসার্ট | APEX-এ একটা রো দেখা যায় |
 | **পরশু (ল্যাব)** | ল্যাব | মেশিনের Host সেটিং + এক কন্ট্রোল স্যাম্পল | লগে `parsed N result(s)` + APEX রিপোর্ট |
 
@@ -23,7 +23,7 @@
 
 ```bash
 cd lis-middleware
-python -m unittest discover -s tests -v        # ৩৬টি টেস্ট পাস হচ্ছে কি?
+python -m unittest discover -s tests -v        # ৫০টি টেস্ট পাস হচ্ছে কি?
 python main.py --dry-run                       # টার্মিনাল ১ (পোর্ট 6661/6662 খোলে)
 ```
 
@@ -70,9 +70,31 @@ python tools/device_sim.py -s hl7_critical   -p 6662 --trace
 
 ---
 
+## ১.৪ নিয়ন্ত্রণ কোথায় — ফাইল নয়, APEX
+
+ল্যাবে যাওয়ার আগে এই সিদ্ধান্তটা পাকা করে নিন: **অ্যানালাইজার যোগ করা, পোর্ট বদলানো,
+একটা মেশিন সাময়িক বন্ধ করা — সব APEX থেকে হবে।** সার্ভারে গিয়ে `config.yaml`
+এডিট করা চলবে না, কারণ ল্যাবের লোক সার্ভারে ঢুকবে না (এবং ঢোকা উচিতও নয়)।
+
+```bash
+# একবার: কন্ট্রোল টেবিল বানান
+sqlplus lis_user/password@//192.168.1.100:1521/ORCL @database/apex_install.sql
+```
+
+এরপর সার্ভারে চালান `python service.py` (সার্ভিস হিসেবে ইনস্টল করলে নিজেই চলে)।
+APEX-এ একটা পোর্ট বদলে Save করলেই ~৫ সেকেন্ডে কার্যকর — রিস্টার্ট লাগে না।
+কোন ফিল্ডে কী নিয়ম বসাবেন, ভুল হলে কী হবে — [`APEX_CONTROL.md`](APEX_CONTROL.md)।
+
+> ঘরে rehearsal করার সময়ও একই কোড পথ চালানো যায়: `python service.py --mode file`
+> → `config.yaml` সেভ করলেই নিজে থেকে reload হয় (লগে "configuration changed")।
+> এতে ল্যাবে যাওয়ার আগেই hot-reload টা যাচাই হয়ে যায়।
+
 ## ২. কাল — নিজের কনফিগে rehearsal
 
 ```bash
+# ০) কন্ট্রোল টেবিল (APEX থেকে সব চালাতে)
+sqlplus lis_user/password@//192.168.1.100:1521/ORCL @database/apex_install.sql
+
 # ১) ডেটাবেস তৈরি
 sqlplus lis_user/password@//<host>:1521/<service> @database/schema.sql
 
