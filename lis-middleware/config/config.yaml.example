@@ -1,0 +1,73 @@
+# config/config.yaml.example
+# ---------------------------------------------------------------
+# কপি করে config/config.yaml বানান, তারপর শুধু নিচের ৪টি জায়গা বদলান:
+#   1. database.host / port / service_name
+#   2. LIS_DB_PASSWORD এনভায়রনমেন্ট ভ্যারিয়েবল (পাসওয়ার্ড এখানে লিখবেন না)
+#   3. analyzers[].port  ← মেশিনের Host সেটিং-এ যেটা দেবেন, হুবহু সেটাই
+#   4. test_code_map     ← মেশিনের টেস্ট কোড → আপনার রিপোর্টের কোড
+# ---------------------------------------------------------------
+
+app:
+  name: "LIS Middleware"
+  timezone: "Asia/Dhaka"
+  log_level: "INFO"
+  log_file: "logs/lis_middleware.log"
+  default_protocol: "AUTO"      # AUTO | ASTM | HL7
+  ack_mode: "ASTM"              # ASTM (0x06) | MLLP (full ACK message)
+  strict_test_codes: false      # true হলে অজানা টেস্ট কোড বাদ যাবে
+
+database:
+  host: "192.168.1.100"         # ← বদলান
+  port: 1521
+  service_name: "ORCL"          # ORCL / XEPDB1 / FREEPDB1
+  username: "lis_user"
+  password: ""                  # খালি রাখুন; LIS_DB_PASSWORD env ব্যবহার করুন
+  schema: "LIS_USER"
+  pool:
+    min: 2
+    max: 10
+    increment: 1
+
+# মেশিনের কোড → আপনার রিপোর্টের কোড
+test_code_map:
+  HGB: "HB"
+  GLU: "FBS"
+  ALT: "SGPT"
+  AST: "SGOT"
+
+analyzers:
+  # --- ল্যাবে যোগ করবেন এমন মেশিন (আপনার আসল মডেল লিখুন) ---
+  - name: "Sysmex_XN_1000"
+    brand: "Sysmex"
+    model: "XN-1000"
+    protocol: "ASTM"            # Sysmex সাধারণত ASTM
+    connection_type: "TCP"      # TCP | SERIAL
+    host: "0.0.0.0"
+    port: 6661                  # ← মেশিনের Host Port সেটিং-এ এটাই দেবেন
+    enabled: true               # ← ল্যাবের দিন true
+    test_codes: ["WBC", "RBC", "HGB", "HCT", "PLT"]
+
+  # --- সিরিয়াল (RS-232) উদাহরণ: মেশিনের কেবল সরাসরি পিসিতে ---
+  - name: "Roche_Cobas_c311"
+    brand: "Roche"
+    model: "Cobas c311"
+    protocol: "ASTM"
+    connection_type: "SERIAL"
+    serial_port: "COM3"         # ল্যাবে Device Manager-এ যেটা দেখবেন
+    baud_rate: 9600
+    data_bits: 7
+    parity: "EVEN"
+    stop_bits: 1
+    enabled: false
+    test_codes: ["GLU", "CREA", "ALT", "AST", "UREA"]
+
+validation:
+  require_sample_id: true
+  require_result_value: true
+  critical_flags: ["C", "HH", "LL"]
+  ignore_sample_prefixes: ["QC", "CTRL", "CAL"]
+
+# ---------------------------------------------------------------
+# ল্যাব ডে-তে যা যা মেশিনে বসাতে হবে → docs/LAB_DAY.md §৩.২
+# সেটআপ যাচাই → python tools/preflight.py
+# ---------------------------------------------------------------

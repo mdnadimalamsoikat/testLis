@@ -24,6 +24,7 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 | [`docs/PROJECT_GUIDE_BN.pdf`](docs/PROJECT_GUIDE_BN.pdf) | 10-page Bengali guide: architecture, schema, APEX, setup, deploy, troubleshooting |
 | [`docs/CODE_WALKTHROUGH.pdf`](docs/CODE_WALKTHROUGH.pdf) | The same pipeline explained code-first, with the real functions |
 | [`docs/REAL_DEVICE.md`](docs/REAL_DEVICE.md) | Honest guide: demo vs real analyzer, wire-level simulation, capturing the real machine's bytes (Bangla) |
+| [`docs/LAB_DAY.md`](docs/LAB_DAY.md) | **Start here for the real thing** — 3-day plan (simulate → rehearse → lab), every machine setting you must change, other simulators, rollback (Bangla) |
 
 ## 60-second start (no Oracle needed)
 
@@ -52,9 +53,13 @@ analyzer's own bytes so you test against the machine, not against samples.
 
 ## For the real lab
 
+Three steps: simulate today, rehearse tomorrow, drive to the lab on day 3.
+Full checklist: [`docs/LAB_DAY.md`](docs/LAB_DAY.md).
+
 ```bash
 sqlplus lis_user/password@//192.168.1.100:1521/ORCL @lis-middleware/database/schema.sql
 export LIS_DB_PASSWORD='...'      # keep passwords out of config.yaml
+python tools/preflight.py         # every check at once — no ❌ before you travel
 python main.py                    # real Oracle writes
 ```
 

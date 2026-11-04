@@ -44,7 +44,24 @@ The browser demo runs the **same** parser/validator/engine code over HTTP: send
 a sample message, watch the ACK, inspect the raw payload, the parsed rows and
 the stored results.
 
-## 2. Quick start (real Oracle)
+## 2. Starting for real
+
+`docs/LAB_DAY.md` (Bangla) is the three-day plan. Short version:
+
+```bash
+# today, at home: simulate the machine
+python main.py --dry-run
+python tools/device_sim.py -s astm_cbc_normal -p 6661 --trace
+
+# tomorrow: rehears with your own config (copy the example, fill 4 values)
+cp config/config.yaml.example config/config.yaml
+export LIS_DB_PASSWORD='...'
+python tools/preflight.py            # ← run this before every trip to the lab
+
+# lab day: only the machine's Host setting changes (IP + port 6661)
+```
+
+## 3. Quick start (real Oracle)
 
 ```bash
 # 1. create the schema objects
@@ -101,7 +118,7 @@ python tools/replay_capture.py logs/capture.jsonl --port 6661 --timing
 
 Full walkthrough (Bangla): [`../docs/REAL_DEVICE.md`](../docs/REAL_DEVICE.md)
 
-## 3. Point a real analyzer at it
+## 4. Point a real analyzer at it
 
 On the analyzer's *Host Communication* / *LIS Connection* page set:
 
@@ -115,12 +132,13 @@ On the analyzer's *Host Communication* / *LIS Connection* page set:
 
 Then: open Windows Firewall for the port (`New-NetFirewallRule -DisplayName "LIS 6661" -Direction Inbound -LocalPort 6661 -Protocol TCP -Action Allow`).
 
-## 4. Code map
+## 5. Code map
 
 ```
 lis-middleware/
 ├── main.py                     # entry point: starts every enabled listener
 ├── config/config.yaml          # DB credentials, analyzers, test-code map
+├── config/config.yaml.example  # commented template to copy (4 values to change)
 ├── core/
 │   ├── engine.py               # the pipeline (raw → parse → validate → insert → ACK)
 │   ├── parser_factory.py       # protocol sniffing + parser selection
@@ -140,6 +158,7 @@ lis-middleware/
 │   └── schema.sql              # tables + APEX views
 ├── demo/app.py                 # browser demo (FastAPI, same engine)
 ├── tools/
+│   ├── preflight.py            # every go/no-go check before the lab trip
 │   ├── device_sim.py           # wire-level analyzer simulator (E1381/MLLP + faults)
 │   ├── sniff_com.py            # capture real analyzer traffic (serial or TCP tap)
 │   ├── replay_capture.py       # replay a captured conversation
@@ -149,14 +168,14 @@ lis-middleware/
 └── tests/test_pipeline.py      # 36 unit tests, no Oracle required
 ```
 
-## 5. Extending it
+## 6. Extending it
 
 * **New analyzer brand** — add an entry under `analyzers:` in `config.yaml`. No code change unless the vendor protocol is proprietary.
 * **Map machine codes to report codes** — `test_code_map:` (`HGB → HB`, `GLU → FBS`).
 * **New protocol** — subclass the parser and register it in `parser_factory.build_parser`.
 * **Different result table** — change the INSERT in `db_writer.insert_results`; it is the only SQL that writes results.
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -171,7 +190,7 @@ lis-middleware/
 | `checksum mismatch` in the log | cable/parity problem or real line noise | the listener NAKs and the analyzer repeats; fix parity (7E1) |
 | Machine stops mid-transfer | it waits for a frame ACK | check the log for `bad block … -> NAK`; that is the retry path working |
 
-## 7. Deploy as a service
+## 8. Deploy as a service
 
 Windows (NSSM or Task Scheduler):
 
@@ -187,7 +206,7 @@ sudo systemctl enable --now lis-middleware
 journalctl -u lis-middleware -f
 ```
 
-## 8. License / medical-device note
+## 9. License / medical-device note
 
 This is integration software, not a certified medical device. Validate every
 result path against your analyzer's manual and your lab's SOP — and never let

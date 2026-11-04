@@ -70,7 +70,7 @@ def cover(doc: Document) -> None:
         ["৩", "কোড", "ASTM/HL7 ফরম্যাট, pipeline, ACK, ডুপ্লিকেট"],
         ["৪", "ডেটাবেস স্কিমা", "টেবিল, ইনডেক্স, APEX ভিউ"],
         ["৫", "Oracle APEX", "রিপোর্ট, ফর্ম, critical alert"],
-        ["৬", "সেটআপ", "স্কিমা → config → রান → মেশিন সেটিং"],
+        ["৬", "সেটআপ ও ল্যাব ডে", "স্কিমা → config → preflight → মেশিন সেটিং → ল্যাবের ক্রম"],
         ["৭", "টেস্ট", "৩৬টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
         ["৮", "ডিপ্লয়মেন্ট", "Windows সার্ভিস, Linux systemd"],
         ["৯", "সমস্যা ও সমাধান", "লক্ষণ → কারণ → সমাধান"],
@@ -388,21 +388,52 @@ def section_setup(doc: Document) -> None:
         "python main.py"
     )
 
+    doc.h2("ধাপ ৩.৫ — preflight (ল্যাবে যাওয়ার আগে বাধ্যতামূলক)", "৬.৩.৫")
+    doc.para("এক কমান্ডে সব যাচাই: Python ও প্যাকেজ, config-এর ভুল (ডুপ্লিকেট পোর্ট, ভুল protocol), "
+             "পোর্ট খোলা যায় কি না, Oracle-এ পৌঁছায় কি না, টেবিল/ভিউ আছে কি না, লগ ফোল্ডার লেখা যায় কি না।")
+    doc.code(
+        "python tools/preflight.py            # পুরো চেক (Oracle সহ)\n"
+        "python tools/preflight.py --offline  # DB ছাড়া\n\n"
+        "# ❌ থাকলে ল্যাবে যাবেন না — প্রতিটি ❌-এর নিচে সমাধান লেখা থাকে\n"
+        "# সব ✅ হলে: python main.py  → device_sim দিয়ে নকল মেশিন → APEX-এ রো দেখা"
+    )
+
     doc.h2("ধাপ ৪ — মেশিনে সেটিং", "৬.৪")
     doc.para("analyzer-এর **Host Communication / LIS Connection** পেজে গিয়ে বসান:")
     rows = [
-        ["ফিল্ড", "মান"],
-        ["Host / IP", "যে পিসিতে middleware চলছে তার আইপি"],
-        ["Port", "6661 (hematology) / 6662 (chemistry) — config অনুযায়ী"],
-        ["Protocol", "ASTM (Sysmex, Roche) / HL7 (Mindray)"],
-        ["Data bits / Parity / Stop", "RS-232 হলে 7-E-1, TCP হলে 8-N-1"],
-        ["Sample ID", "যে বারকোড APEX-এ স্ক্যান করেছেন, সেটাই"],
+        ["ফিল্ড", "মান", "ভুল হলে"],
+        ["Host / LIS IP", "middleware চলা পিসির স্থির IP", "মেশিন কিছুই পাঠাবে না"],
+        ["Host Port", "6661 (ASTM) / 6662 (HL7) — config-এর সাথে হুবহু", "connection refused"],
+        ["Protocol", "ASTM (Sysmex, Roche) / HL7 (Mindray)", "no results parsed"],
+        ["Transmission", "ASTM হলে E1381 (কিছু মেশিনে Basic/RAW)", "হ্যান্ডশেক মিলবে না"],
+        ["Checksum", "চালু (আমরা যাচাই করি)", "প্রতি ব্লকে NAK → রিট্রাই"],
+        ["Baud/Data/Parity/Stop", "9600 · 7 · EVEN · 1 (RS-232)", "আজেবাজে অক্ষর"],
+        ["Sample ID", "APEX-এ স্ক্যান করা বারকোডই", "ভুল স্যাম্পলে রেজাল্ট"],
+        ["Auto-send results", "চালু", "অপারেটরকে Send চাপতে হবে"],
+        ["Host query", "প্রথম দিনে বন্ধ", "ওয়ার্কলিস্ট লাগবে"],
     ]
     doc.table(rows[0], rows[1:], widths=[150, 300], size=8.4)
 
     doc.callout("Firewall", "Windows-এ পোর্ট খুলতে ভুলবেন না:\n"
                 "`New-NetFirewallRule -DisplayName \"LIS 6661\" -Direction Inbound -LocalPort 6661 -Protocol TCP -Action Allow`",
                 kind="warn")
+
+
+def section_labday(doc: Document) -> None:
+    doc.h1("ল্যাব ডে — ক্রম মেনে", "বিভাগ ৬ক")
+    doc.para("ঘরে সব প্রস্তুত হওয়ার পর ল্যাবে মাত্র এই ধাপগুলো:")
+    doc.numbered([
+        "**পিং ও পোর্ট:** `ping <মেশিনের IP>` এবং `netstat -ano | findstr 6661` — LISTENING আছে কি?",
+        "**কন্ট্রোল স্যাম্পল:** মেশিন থেকে QC বা ফাঁকা স্যাম্পল পাঠান; লগে `parsed N result(s)` খুঁজুন।",
+        "**APEX:** `v_sample_results`-এ স্যাম্পল আইডি ও ভ্যালু মিলছে কি?",
+        "**একটা আসল স্যাম্পল**, তারপর ল্যাবের নিজের রিপোর্টের সাথে মিলিয়ে দেখা।",
+        "**ক্যাপচার:** `sniff_com` দিয়ে সেশন রেকর্ড করে রাখুন — ভবিষ্যতের টেস্টের ভিত্তি।",
+    ])
+    doc.callout("আটকে গেলে রোলব্যাক", "মেশিনের Host communication **Off** করে দিন — মেশিন আবার নিজের "
+                "প্রিন্টারে রিপোর্ট দেবে, ল্যাব আটকে থাকবে না। লগ + `lis_raw_messages` নিয়ে ঘরে ফিরে "
+                "`device_sim`/`replay_capture` দিয়ে সমস্যা রিপ্রোডিউস করে ঠিক করুন।", kind="warn")
+    doc.para("বিস্তারিত ধাপ, মেশিনের সেটিং টেবিল আর সমস্যার তালিকা: `docs/LAB_DAY.md`।",
+             size=9, color=MUTED)
 
 
 def section_test(doc: Document) -> None:
@@ -457,6 +488,21 @@ def section_test(doc: Document) -> None:
         "python tools/device_sim.py -s hl7_critical   -p 6662 --trace",
         caption="tools/device_sim.py — ওয়্যার-লেভেল সিমুলেটর"
     )
+
+    doc.h2("Mirth ছাড়া অন্য সিমুলেটর", "৭.৬")
+    doc.para("আসল মেশিনের মতো টেস্ট করার জন্য আরও অপশন আছে — কমার্শিয়াল, ওপেন সোর্স আর ভার্চুয়াল পোর্ট:")
+    rows = [
+        ["টুল", "কী ভালো", "সীমা"],
+        ["tools/device_sim.py (এই প্রজেক্ট)", "E1381 হ্যান্ডশেক, চেকসাম, NAK-রিট্রাই, নয়েজ, MLLP, ফল্ট ইনজেকশন", "সিনারিও নিজে বানাতে হবে"],
+        ["Lab Analyzer Simulator (ওপেন সোর্স)", "ব্রাউজার প্যানেল, HL7+ASTM, Docker, ফিক্সচার", "থার্ড-পার্টি, নমুনা ফরম্যাট"],
+        ["Sand Lake Simulator", "লো-লেভেল ASTM/HL7 ডিবাগিং, ট্রান্সমিশন ফাইল", "কমার্শিয়াল লাইসেন্স"],
+        ["HEDONICS ASTM Simulator", "ইনস্ট্রুমেন্ট ↔ LIS দুই দিকেই", "কমার্শিয়াল"],
+        ["HL7 Inspector / 7Edit", "HL7 মেসেজ দেখা/এডিট", "ASTM বোঝে না"],
+        ["com0com / HHD Virtual Serial Ports", "ভার্চুয়াল COM পেয়ার (COM3↔COM4)", "ড্রাইভার ইনস্টল"],
+    ]
+    doc.table(rows[0], rows[1:], widths=[150, 210, 110], size=8.0)
+    doc.para("কমার্শিয়াল টুলের দাম/লাইসেন্স বদলাতে পারে — কেনার আগে যাচাই করুন। নিজের কাজের "
+             "৯০% `device_sim` দিয়েই হবে।", size=9, color=MUTED)
 
     doc.h2("আসল মেশিনের ডেটা ধরা ও রিপ্লে", "৭.৫")
     doc.para("সিমুলেটর যতই ভালো হোক, আপনার Sysmex-এর ফিল্ড ম্যাপিং সে জানে না। একবার আসল "
@@ -591,6 +637,9 @@ def section_checklist(doc: Document) -> None:
         "একটা আসল স্যাম্পল দিয়ে end-to-end টেস্ট",
         "বারকোড স্ক্যান → মেশিন → APEX — পুরো পথে ভ্যালু মিলেছে",
         "আসল মেশিনের এক ক্যাপচার নেওয়া হয়েছে এবং সেটি রিপ্লে করে দেখা গেছে",
+        "`python tools/preflight.py` → কোনো ❌ নেই (ল্যাবে যাওয়ার আগের শেষ গেট)",
+        "সার্ভারে স্থির IP + ফায়ারওয়ালে পোর্ট খোলা",
+        "মেশিনের Host সেটিং-এর নাম আর মান খাতায় লেখা (ম্যানুয়ালের Host Interface অধ্যায়)",
     ])
     doc.h2("APEX", "১০.৪")
     doc.bullets([
@@ -626,6 +675,7 @@ def main() -> None:
     section_database(doc)
     section_apex(doc)
     section_setup(doc)
+    section_labday(doc)
     section_test(doc)
     section_deploy(doc)
     section_troubleshoot(doc)
