@@ -22,13 +22,16 @@ import logging
 import time
 from typing import Any, Dict, Optional, Protocol
 
+from core.e1381 import ACK, EOT, E1381Framer, ENQ, NAK, compute_checksum
+
 logger = logging.getLogger("LIS.TCP")
 
 MLLP_START = b"\x0b"
 MLLP_END = b"\x1c"
 CR = b"\r"
-ACK = b"\x06"
-NAK = b"\x15"
+ACK_B = bytes([ACK])
+NAK_B = bytes([NAK])
+EOT_B = bytes([EOT])
 
 
 class ResultSink(Protocol):
@@ -89,8 +92,12 @@ class TCPListener:
         peer = f"{peer_info[0]}:{peer_info[1]}" if peer_info else "unknown"
         self._connections += 1
         logger.info("%s: connection from %s (%d active)", self.name, peer, self._connections)
-        buffer = b""
-        idle_since = time.monotonic()
+
+        framer = E1381Framer()
+        # a frame is buffered until its ACK is known, so a NAK can trigger a retry
+        pending_frame = ""
+        mllp_buffer = b""
+        e1381_mode = False        # becomes True after the first ENQ
 
         try:
             while True:
@@ -101,32 +108,87 @@ class TCPListener:
                     break
 
                 if not chunk:
-                    # client closed: flush anything left (HL7 basic mode)
-                    if buffer.strip():
-                        await self._consume(buffer, peer)
+                    leftover = framer.flush()
+                    if leftover and leftover.text.strip():
+                        pending_frame += leftover.text
+                    if pending_frame.strip():
+                        await self._consume(pending_frame, peer)
+                    if mllp_buffer.strip():
+                        await self._consume(mllp_buffer, peer)
                     break
-                buffer += chunk
 
-                # An analyzer can batch several messages per TCP write.
-                while True:
-                    payload, rest, needs_ack = self._extract(buffer)
-                    if payload is None:
-                        break
-                    buffer = rest
-                    idle_since = time.monotonic()
-                    ok = await self._consume(payload, peer)
-                    if needs_ack:
-                        writer.write(ACK if ok else NAK)
+                # HL7 analyzers frame with VT ... FS; ASTM never does
+                mllp_buffer += chunk
+                if MLLP_START in mllp_buffer:
+                    e1381_mode = False
+                    while True:
+                        payload, rest, needs_ack = self._extract(mllp_buffer)
+                        if payload is None:
+                            break
+                        mllp_buffer = rest
+                        ok = await self._consume(payload, peer)
+                        if needs_ack:
+                            writer.write(ACK_B if ok else NAK_B)
+                            await writer.drain()
+                    if not mllp_buffer or mllp_buffer.strip()[:1] != MLLP_START:
+                        mllp_buffer = mllp_buffer if mllp_buffer.strip() else b""
+                    continue
+
+                events = framer.feed(chunk)
+                for event in events:
+                    if event.kind == "enq":
+                        e1381_mode = True
+                        logger.debug("%s: ENQ from %s", self.name, peer)
+                        writer.write(ACK_B)
+                        await writer.drain()
+                        continue
+
+                    if event.kind == "eot":
+                        # end of transmission: process whatever we collected
+                        if pending_frame.strip():
+                            ok = await self._consume(pending_frame, peer)
+                            pending_frame = ""
+                        mllp_buffer = b""
+                        continue
+
+                    if event.kind == "frame":
+                        if not event.checksum_ok:
+                            # bad block -> NAK, the sender repeats the frame
+                            writer.write(NAK_B)
+                            await writer.drain()
+                            continue
+                        pending_frame += event.text + "\r"
+                        writer.write(ACK_B)
+                        await writer.drain()
+                        continue
+
+                    if event.kind == "text":
+                        # inside a E1381 session a bare text block is a bad frame:
+                        # NAK so the analyzer repeats it
+                        if e1381_mode and event.detail != "unterminated":
+                            logger.warning("%s: bad block from %s -> NAK", self.name, peer)
+                            writer.write(NAK_B)
+                            await writer.drain()
+                            continue
+                        # unframed / loose ASTM or HL7 basic mode
+                        if event.detail == "unterminated":
+                            pending_frame += event.text
+                            continue
+                        pending_frame += event.text + "\r"
+                        if not e1381_mode:
+                            ok = await self._consume(pending_frame, peer)
+                            pending_frame = ""
+                            writer.write(ACK_B if ok else NAK_B)
+                            await writer.drain()
+
+                # unframed text that never sees an ETX (basic mode): send it on
+                if pending_frame and not e1381_mode and not chunk.endswith(bytes([ETX])):
+                    if len(pending_frame) > 60 and "\r" in pending_frame.strip():
+                        ok = await self._consume(pending_frame, peer)
+                        pending_frame = ""
+                        writer.write(ACK_B if ok else NAK_B)
                         await writer.drain()
 
-                if len(buffer) > 1024 * 1024:  # 1 MB guard
-                    logger.error("%s: message exceeded 1MB, dropping buffer", self.name)
-                    buffer = b""
-
-                if buffer and (time.monotonic() - idle_since) > 5:
-                    # unfinished frame — hand over what we have instead of hanging
-                    await self._consume(buffer, peer)
-                    buffer = b""
         except (ConnectionResetError, BrokenPipeError):
             logger.warning("%s: connection reset by %s", self.name, peer)
         except Exception as exc:  # pragma: no cover
@@ -140,73 +202,17 @@ class TCPListener:
                 pass
             logger.info("%s: disconnected %s", self.name, peer)
 
-    def _extract(self, buffer: bytes) -> tuple[Optional[bytes], bytes, bool]:
-        """Pull one complete message out of the stream buffer.
+    async def _consume(self, payload, peer: str) -> bool:
+        """Hand one message to the sink — accepts str (ASTM framer) or bytes (MLLP)."""
+        if isinstance(payload, (bytes, bytearray)):
+            try:
+                raw = payload.decode("utf-8", errors="ignore").strip("\x00")
+            except Exception:
+                logger.error("%s: undecodable payload from %s", self.name, peer)
+                return False
+        else:
+            raw = str(payload)
 
-        Returns ``(payload, remaining, needs_ack)``. ``payload`` is None when
-        no complete message is available yet.
-        """
-        if not buffer:
-            return None, buffer, False
-
-        # drop stray bytes analyzers leave between frames (EOT / NUL / ENQ)
-        buffer = buffer.lstrip(b"\x04\x00\x05")
-        if not buffer:
-            return None, buffer, False
-
-        # --- HL7 MLLP: \x0b ... \x1c --------------------------------
-        start = buffer.find(MLLP_START)
-        if start != -1:
-            end = buffer.find(MLLP_END, start)
-            if end == -1:
-                return None, buffer, False
-            payload = buffer[start + 1:end]
-            remaining = buffer[end + 1:]
-            if remaining.startswith(CR):
-                remaining = remaining[1:]
-            return payload, remaining, True
-        if buffer.startswith(b"\x0b"):
-            return None, buffer, False
-
-        # --- ASTM: \x05 "H|..." \x02 ... \x03 -----------------------
-        if buffer.startswith(b"\x05"):  # ENQ — strip it, message follows
-            buffer = buffer[1:]
-
-        if MLLP_END in buffer:  # stray FS from a mis-framed client
-            idx = buffer.find(MLLP_END)
-            payload, remaining = buffer[:idx], buffer[idx + 1:]
-            return payload, remaining, True
-
-        if b"\x03" in buffer:  # ASTM ETX terminates the record set
-            idx = buffer.find(b"\x03")
-            payload, remaining = buffer[:idx], buffer[idx + 1:]
-            return payload, remaining, True
-
-        # --- bare text: HL7 basic mode / ASTM without control chars --
-        text = buffer.decode("utf-8", errors="ignore")
-        if "\r" in text or "\n" in text:
-            complete = self._looks_complete(text)
-            if complete:
-                return buffer, b"", True
-        return None, buffer, False
-
-    @staticmethod
-    def _looks_complete(text: str) -> bool:
-        upper = text.upper()
-        if "MSH|" in upper and text.rstrip().endswith(("F", "|F")) and "\n" in text:
-            return True
-        if re_astm_terminator(text):
-            return True
-        if "MSH|" in upper:
-            return True
-        return False
-
-    async def _consume(self, payload: bytes, peer: str) -> bool:
-        try:
-            raw = payload.decode("utf-8", errors="ignore").strip("\x00")
-        except Exception:
-            logger.error("%s: undecodable payload from %s", self.name, peer)
-            return False
         # a frame holding nothing but control characters is not a message
         if not raw.strip().strip("\x00\x02\x03\x04\x05\x06\x15\x1c\r\n"):
             return True
@@ -218,12 +224,21 @@ class TCPListener:
         result = await self.sink.handle_payload(raw, self.analyzer, peer)
         return bool(result.get("ok"))
 
+    # ------------------------------------------------------------------ MLLP
+    def _extract(self, buffer: bytes):
+        """Pull one MLLP message (VT ... FS CR) out of the stream buffer."""
+        if not buffer:
+            return None, buffer, False
+        start = buffer.find(MLLP_START)
+        if start == -1:
+            return None, buffer[-1:], False        # keep only the tail
+        end = buffer.find(MLLP_END, start)
+        if end == -1:
+            return None, buffer[start:], False
+        payload = buffer[start + 1:end]
+        remaining = buffer[end + 1:]
+        if remaining.startswith(CR):
+            remaining = remaining[1:]
+        return payload, remaining, True
 
-def re_astm_terminator(text: str) -> bool:
-    """True when the buffer holds a complete ASTM record set."""
-    if "H|" not in text.upper():
-        return False
-    lines = [ln for ln in text.replace("\r", "\n").split("\n") if ln.strip()]
-    if not lines:
-        return False
-    return any(ln.strip().upper().startswith("L|") for ln in lines) or len(lines) > 1
+

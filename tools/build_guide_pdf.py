@@ -71,7 +71,7 @@ def cover(doc: Document) -> None:
         ["৪", "ডেটাবেস স্কিমা", "টেবিল, ইনডেক্স, APEX ভিউ"],
         ["৫", "Oracle APEX", "রিপোর্ট, ফর্ম, critical alert"],
         ["৬", "সেটআপ", "স্কিমা → config → রান → মেশিন সেটিং"],
-        ["৭", "টেস্ট", "২৮টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
+        ["৭", "টেস্ট", "৩৬টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
         ["৮", "ডিপ্লয়মেন্ট", "Windows সার্ভিস, Linux systemd"],
         ["৯", "সমস্যা ও সমাধান", "লক্ষণ → কারণ → সমাধান"],
         ["১০", "চেকলিস্ট", "প্রোডাকশনে যাওয়ার আগে"],
@@ -107,7 +107,7 @@ def section_why(doc: Document) -> None:
     doc.h2("তিনটি পথ — কোনটা আপনার জন্য", "১.১")
     rows = [
         ["বিকল্প", "সুবিধা", "অসুবিধা", "কখন ভালো"],
-        ["Mirth Connect", "ফ্রি, রেডিমেড, ASTM+HL7+MLLP built-in, GUI", "Java দরকার, আলাদা সার্ভার", "একাধিক analyzer, দ্রুত চালু"],
+        ["Mirth Connect", "ফ্রি কোর, HL7+MLLP নেটিভ, GUI", "ASTM E1394/E1381 আলাদা কমার্শিয়াল এক্সটেনশন; Java দরকার", "HL7-ভাষী analyzer, একাধিক মেশিন"],
         ["নিজের কোড (এই প্রজেক্ট)", "পূর্ণ নিয়ন্ত্রণ, কোনো লাইসেন্স নেই, Oracle-native", "নিজে মেইনটেইন করতে হবে", "১-৩টি analyzer, কোড শেখার ইচ্ছা"],
         ["Vendor middleware", "ভেন্ডর সাপোর্ট", "ব্যয়বহুল, একই ব্র্যান্ডে সীমাবদ্ধ", "এন্টারপ্রাইজ, বাজেট আছে"],
     ]
@@ -412,7 +412,7 @@ def section_test(doc: Document) -> None:
 
     doc.h2("ইউনিট টেস্ট — Oracle ছাড়াই", "৭.১")
     doc.code("python -m unittest discover -s tests -v\n"
-             "# 28 tests — ASTM, HL7, sniffing, validator, dedupe, ACK")
+             "# 36 tests — ASTM, HL7, E1381 framing, validator, dedupe, ACK")
     doc.para("টেস্টগুলো আসল ফরম্যাটের নমুনা দিয়ে চলে (samples/messages.yaml), তাই parser "
              "বদলালে সাথে সাথেই বোঝা যায় কিছু ভেঙেছে কি না।")
 
@@ -432,6 +432,49 @@ def section_test(doc: Document) -> None:
     doc.code("python -m demo.app        # http://localhost:8080")
     doc.para("একই pipeline HTTP দিয়ে চালায় — মেসেজ পাঠানো, ACK দেখা, raw মেসেজ, parsed রেজাল্ট, "
              "ডুপ্লিকেট টেস্ট — সব ব্রাউজারে। মেসেজ এডিট করে ইচ্ছাকৃত ভাঙলে error path-ও দেখা যায়।")
+
+    doc.h2("আসল মেশিনের অনুভূতি — E1381 ওয়্যার লেভেল", "৭.৪")
+    doc.para("ব্রাউজার ডেমো একটা HTTP ফর্ম — আসল অ্যানালাইজার তা নয়। আসল মেশিন "
+             "ASTM E1381 হ্যান্ডশেক করে: **ENQ → ACK → STX⟨নম্বর⟩ডেটা⟨ETX⟩⟨চেকসাম⟩ → ACK … → EOT**। "
+             "চেকসাম ভুল হলে মেশিন NAK পায় এবং একই ব্লক আবার পাঠায়। এই লেয়ারটা "
+             "`core/e1381.py`-তে আছে এবং ৮টি টেস্টে যাচাই করা।")
+    doc.code(
+        "analyzer                        middleware\n"
+        "  ENQ  (0x05)  -------------->  \"আমার পাঠানোর আছে\"\n"
+        "               <--------------  ACK  (0x06)\n"
+        "  STX 1 <records> ETX <cs> -->  ফ্রেম নম্বর + ডেটা + চেকসাম\n"
+        "               <--------------  ACK / NAK  (NAK হলে মেশিন রিপিট করে)\n"
+        "  EOT  (0x04)  -------------->  শেষ; এখন পুরো মেসেজ প্রসেস হয়",
+        caption="একই কথোপকথন যেটা কেবলে ঘটে — ডেমো ফর্মে দেখা যায় না"
+    )
+    doc.code(
+        "python main.py --dry-run                                     # টার্মিনাল ১\n"
+        "python tools/device_sim.py -s astm_cbc_normal -p 6661 --trace  # টার্মিনাল ২\n\n"
+        "# কেবল-এর সমস্যা বানিয়ে দেখা\n"
+        "python tools/device_sim.py -s astm_cbc_normal --fault checksum --fault-rate 0.4\n"
+        "python tools/device_sim.py -s astm_cbc_normal --fault noise    --fault-rate 0.4\n"
+        "python tools/device_sim.py -s astm_cbc_normal --fault drop     --fault-rate 0.25\n"
+        "python tools/device_sim.py -s hl7_critical   -p 6662 --trace",
+        caption="tools/device_sim.py — ওয়্যার-লেভেল সিমুলেটর"
+    )
+
+    doc.h2("আসল মেশিনের ডেটা ধরা ও রিপ্লে", "৭.৫")
+    doc.para("সিমুলেটর যতই ভালো হোক, আপনার Sysmex-এর ফিল্ড ম্যাপিং সে জানে না। একবার আসল "
+             "ক্যাপচার নিলে সেটাই চিরকালের রেফারেন্স:")
+    doc.code(
+        "# সিরিয়াল ট্যাপ (RS-232): মেশিন → sniff_com → middleware\n"
+        "python tools/sniff_com.py --port COM4 --baud 9600 --parity EVEN \\\n"
+        "    --tap 127.0.0.1:6661 --out logs/capture.jsonl\n\n"
+        "# TCP ট্যাপ: মেশিনের Host সেটিং-এ পোর্ট 6663 দিন\n"
+        "python tools/sniff_com.py --listen 0.0.0.0:6663 --tap 127.0.0.1:6661\n\n"
+        "# পরে যতবার চান রিপ্লে করুন (parser বদলালে এটাই রিগ্রেশন টেস্ট)\n"
+        "python tools/replay_capture.py logs/capture.jsonl --list\n"
+        "python tools/replay_capture.py logs/capture.jsonl --port 6661 --timing"
+    )
+
+    doc.callout("সৎ কথা", "ডেমো ডেটা দিয়ে শুধু পাইপলাইন প্রমাণ হয়, আপনার মেশিনের ফরম্যাট নয়। "
+                "তাই আসল মেশিনে যাওয়ার আগে অন্তত একবার `sniff_com` দিয়ে ক্যাপচার নিন এবং সেই সেশন "
+                "`replay_capture` দিয়ে চালান। বিস্তারিত: `docs/REAL_DEVICE.md`।", kind="warn")
 
     rows = [
         ["সিনারিও", "কী পরীক্ষা হয়"],
@@ -506,6 +549,8 @@ def section_troubleshoot(doc: Document) -> None:
         ["একই রেজাল্ট দুইবার", "মেশিন পুনরায় পাঠাচ্ছে (স্বাভাবিক)", "ডুপ্লিকেট আটকায়; lis_raw_messages-এ DUPLICATE"],
         ["QC নমুনা রিপোর্টে ঢুকছে", "quality-control স্যাম্পল আসল রোগীর মতোই আসে", "validation.ignore_sample_prefixes-এ QC/CTRL/CAL দিন → status IGNORED"],
         ["পোর্ট ইতিমধ্যে ব্যবহৃত", "অন্য প্রোগ্রাম", "netstat -ano | findstr 6661 → PID বন্ধ করুন"],
+        ["লগে checksum mismatch", "কেবলের নয়েজ বা parity ভুল", "লিসেনার NAK দেয়, মেশিন আবার পাঠায় — 7E1 মিলিয়ে নিন"],
+        ["মেশিন মাঝপথে থেমে যায়", "ব্লকের ACK-এর অপেক্ষায়", "লগে bad block → NAK দেখুন; এটাই রিট্রাই পথ"],
     ]
     doc.table(rows[0], rows[1:], widths=[130, 150, 190], size=8.2)
 
@@ -545,6 +590,7 @@ def section_checklist(doc: Document) -> None:
         "ACK mode (ASTM / MLLP) মিলিয়ে দেখা",
         "একটা আসল স্যাম্পল দিয়ে end-to-end টেস্ট",
         "বারকোড স্ক্যান → মেশিন → APEX — পুরো পথে ভ্যালু মিলেছে",
+        "আসল মেশিনের এক ক্যাপচার নেওয়া হয়েছে এবং সেটি রিপ্লে করে দেখা গেছে",
     ])
     doc.h2("APEX", "১০.৪")
     doc.bullets([

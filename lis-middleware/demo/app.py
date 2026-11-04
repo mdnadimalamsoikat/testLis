@@ -29,6 +29,7 @@ from pydantic import BaseModel                  # noqa: E402
 import uvicorn                                  # noqa: E402
 
 from core.ack_handler import ACKHandler          # noqa: E402
+from core.e1381 import E1381Framer               # noqa: E402
 from core.engine import IngestEngine             # noqa: E402
 from core.parser_factory import sniff_protocol   # noqa: E402
 from core.validator import ResultValidator       # noqa: E402
@@ -67,6 +68,10 @@ class SendRequest(BaseModel):
     raw: Optional[str] = None
     analyzer: Optional[str] = None
     protocol: str = "AUTO"
+    # how the payload is framed on the wire: AUTO (one shot) or E1381 (handshake)
+    framing: str = "AUTO"
+    # which answer path to simulate: the middleware (parse+store) or the device
+    mode: str = "middleware"
 
 
 app = FastAPI(title="LIS Middleware Demo", docs_url="/api/docs")
@@ -127,6 +132,90 @@ def send(request: SendRequest) -> JSONResponse:
         "stats": ENGINE.stats(),
     })
     return JSONResponse(response)
+
+
+@app.post("/api/wire")
+def wire(request: SendRequest) -> JSONResponse:
+    """Simulate the *device → middleware* conversation, step by step.
+
+    Returns what the analyzer sends and what the middleware answers, including
+    the ENQ/ACK handshake, per-frame checksums and the final ACK/NAK. Nothing is
+    stored: this exists to show why a real machine feels different from a form.
+    """
+    raw = request.raw
+    if not raw and request.scenario:
+        raw = SAMPLES.get(request.scenario, "")
+    if not raw or not raw.strip():
+        return JSONResponse({"ok": False, "note": "empty payload"}, status_code=400)
+
+    analyzer = dict(_pick_analyzer(request.analyzer, request.protocol))
+    peer = f"wire:{analyzer['name']}"
+
+    if str(request.framing).upper() == "E1381":
+        return JSONResponse(_e1381_session(raw.strip(), analyzer, peer))
+
+    # one-shot framing (what the mock tool sends for HL7 / basic ASTM)
+    protocol = sniff_protocol(raw)
+    response = ENGINE.process(raw, analyzer, peer=peer)
+    return JSONResponse({
+        "mode": "oneshot",
+        "steps": [
+            {"dir": "tx", "label": "STX … ETX", "text": raw.strip()[:400],
+             "note": "single block, no handshake"},
+            {"dir": "rx", "label": "ACK (0x06)" if response["ok"] else "NAK (0x15)",
+             "text": repr(response["ack"]), "note": response["note"]},
+        ],
+        "result": response,
+    })
+
+
+def _e1381_session(raw: str, analyzer: Dict[str, Any], peer: str) -> Dict[str, Any]:
+    """Run the real handshake against the engine — in memory, no sockets."""
+    from core.e1381 import ENQ, STX, ETX, build_frame, checksum_chars, compute_checksum
+
+    steps: List[Dict[str, Any]] = []
+    framer = E1381Framer()
+    accepted = False
+    collected = ""
+
+    def tx(label: str, text: str, note: str = "") -> None:
+        steps.append({"dir": "tx", "label": label, "text": text, "note": note})
+
+    def rx(label: str, text: str = "", note: str = "") -> None:
+        steps.append({"dir": "rx", "label": label, "text": text, "note": note})
+
+    # 1. ENQ → ACK
+    tx("ENQ (0x05)", "", "analyzer: “I have results to send”")
+    rx("ACK (0x06)", "", "middleware: “go ahead”")
+
+    # 2. frames
+    blocks = [line for line in raw.replace("\r\n", "\n").split("\n") if line.strip()]
+    for index, line in enumerate(blocks, start=1):
+        number = ((index - 1) % 8) + 1
+        frame = build_frame(line, number)
+        size = len(line.encode())
+        tx(f"STX {number} … ETX ⟨cs⟩", line,
+           f"frame {number}, {size} bytes, checksum {compute_checksum(0x30 + number, line.encode()):02X}")
+        events = framer.feed(frame)
+        ok = all(event.checksum_ok for event in events if event.kind == "frame")
+        collected += line + "\r"
+        rx("ACK (0x06)" if ok else "NAK (0x15)", "",
+           "frame accepted" if ok else "checksum mismatch → analyzer repeats the frame")
+
+    # 3. EOT → engine
+    tx("EOT (0x04)", "", "end of transmission")
+    response = ENGINE.process(collected, analyzer, peer=peer)
+    accepted = response["ok"]
+    rx("engine", "", response["note"])
+
+    return {
+        "mode": "e1381",
+        "steps": steps,
+        "result": response,
+        "frames": len(blocks),
+        "accepted": accepted,
+        "analyzer_name": analyzer["name"],
+    }
 
 
 @app.post("/api/reset")

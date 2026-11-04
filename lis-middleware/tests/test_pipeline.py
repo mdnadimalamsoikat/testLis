@@ -15,6 +15,8 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.ack_handler import ACKHandler              # noqa: E402
+from core.e1381 import (ACK, EOT, ENQ, ETX, NAK, STX,  # noqa: E402
+                        E1381Framer, build_frame, compute_checksum)
 from core.engine import IngestEngine                 # noqa: E402
 from core.parser_factory import parse_message, sniff_protocol  # noqa: E402
 from core.validator import ResultValidator           # noqa: E402
@@ -230,6 +232,61 @@ class TestEnginePipeline(unittest.TestCase):
         response = engine.process(SAMPLES["hl7_biochem"], ANALYZER)
         self.assertIn("MSA|AA", response["ack"])
         self.assertTrue(response["ack"].startswith("\x0b"))
+
+
+class TestE1381Framing(unittest.TestCase):
+    """The layer that makes a real analyzer talk: ENQ/frame/ACK/EOT."""
+
+    def test_checksum_matches_the_wire_rule(self):
+        # frame number + text + ETX, low byte
+        self.assertEqual(compute_checksum(0x31, b"H|\^&|"), (0x31 + sum(b"H|\^&|") + ETX) & 0xFF)
+
+    def test_frame_is_stx_number_text_etx_checksum(self):
+        frame = build_frame("R|1|^^^WBC|7.5", 3)
+        self.assertEqual(frame[0], STX)
+        self.assertEqual(frame[1], ord("3"))
+        self.assertEqual(frame[-3], ETX)
+        self.assertEqual(len(frame[-2:]), 2)
+
+    def test_round_trip_through_the_framer(self):
+        framer = E1381Framer()
+        events = framer.feed(bytes([ENQ]) + build_frame("R|1|^^^WBC|7.5", 1) + bytes([EOT]))
+        kinds = [e.kind for e in events]
+        self.assertEqual(kinds, ["enq", "frame", "eot"])
+        self.assertEqual(events[1].text.strip(), "R|1|^^^WBC|7.5")
+        self.assertTrue(events[1].checksum_ok)
+
+    def test_bad_checksum_is_reported(self):
+        frame = build_frame("L|1|N", 1)
+        broken = frame[:-1] + bytes([0x40])
+        events = E1381Framer().feed(broken)
+        self.assertEqual(events[0].kind, "frame")
+        self.assertFalse(events[0].checksum_ok)
+
+    def test_split_frame_across_tcp_segments(self):
+        frame = build_frame("R|1|^^^HGB|14.5", 2)
+        framer = E1381Framer()
+        self.assertEqual(framer.feed(frame[:5]), [])          # nothing yet
+        events = framer.feed(frame[5:])
+        self.assertEqual(events[0].text.strip(), "R|1|^^^HGB|14.5")
+        self.assertTrue(events[0].checksum_ok)
+
+    def test_noise_before_stx_is_resynced(self):
+        events = E1381Framer().feed(bytes([0x00, 0x7F]) + build_frame("L|1|N", 1))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, "frame")
+        self.assertTrue(events[0].checksum_ok)
+
+    def test_frame_number_wraps_after_8(self):
+        event = E1381Framer().feed(build_frame("L|1|N", 0))[0]   # sent as 0x30
+        self.assertEqual(event.frame_number, 0)
+
+    def test_unterminated_text_is_flushed(self):
+        framer = E1381Framer()
+        framer.feed(b"MSH|^~\\&|A|B|C")
+        leftover = framer.flush()
+        self.assertIsNotNone(leftover)
+        self.assertIn("MSH", leftover.text)
 
 
 if __name__ == "__main__":

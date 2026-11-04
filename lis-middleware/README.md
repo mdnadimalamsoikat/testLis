@@ -36,7 +36,7 @@ cd lis-middleware
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-python -m unittest discover -s tests -v                # 28 tests, no DB required
+python -m unittest discover -s tests -v                # 36 tests, no DB required
 python -m demo.app                                     # browser demo on :8080
 ```
 
@@ -75,6 +75,32 @@ Expected log:
 2026-11-04 10:30:12 | INFO | LIS.DBW     | inserted SAMPLE-0001 / WBC = 7.5 10*3/uL
 ```
 
+## 2b. Feel what a real machine does (wire level)
+
+The browser demo is an HTTP form — a real analyzer is *not*. To see the actual
+protocol, use the device simulator, which speaks ASTM E1381 (ENQ / ACK /
+checksummed frames / NAK-retry / EOT) and HL7 MLLP:
+
+```bash
+python main.py --dry-run                                            # terminal 1
+python tools/device_sim.py -s astm_cbc_normal -p 6661 --trace       # terminal 2
+
+# abuse the link like a real cable does
+python tools/device_sim.py -s astm_cbc_normal --fault checksum --fault-rate 0.4
+python tools/device_sim.py -s astm_cbc_normal --fault noise   --fault-rate 0.4
+python tools/device_sim.py -s astm_cbc_normal --fault drop    --fault-rate 0.25
+```
+
+And to work with **your** machine's bytes instead of samples:
+
+```bash
+python tools/sniff_com.py --port COM4 --baud 9600 --parity EVEN \
+    --tap 127.0.0.1:6661 --out logs/capture.jsonl    # capture the analyzer
+python tools/replay_capture.py logs/capture.jsonl --port 6661 --timing
+```
+
+Full walkthrough (Bangla): [`../docs/REAL_DEVICE.md`](../docs/REAL_DEVICE.md)
+
 ## 3. Point a real analyzer at it
 
 On the analyzer's *Host Communication* / *LIS Connection* page set:
@@ -103,8 +129,9 @@ lis-middleware/
 ├── parsers/
 │   ├── astm_parser.py          # ASTM E1394 / LIS2-A2
 │   └── hl7_parser.py           # HL7 v2 ORU^R01 (OBX segments)
+├── core/e1381.py               # ENQ/ACK framing + checksums (the real ASTM link)
 ├── listeners/
-│   ├── tcp_listener.py         # asyncio TCP/MLLP, many analyzers at once
+│   ├── tcp_listener.py         # asyncio TCP/MLLP + E1381 handshake
 │   └── serial_listener.py      # pyserial RS-232, threaded
 ├── database/
 │   ├── db_connection.py        # oracledb thin pool (no Oracle Client)
@@ -113,10 +140,13 @@ lis-middleware/
 │   └── schema.sql              # tables + APEX views
 ├── demo/app.py                 # browser demo (FastAPI, same engine)
 ├── tools/
-│   ├── mock_analyzer.py        # pretend to be an analyzer
+│   ├── device_sim.py           # wire-level analyzer simulator (E1381/MLLP + faults)
+│   ├── sniff_com.py            # capture real analyzer traffic (serial or TCP tap)
+│   ├── replay_capture.py       # replay a captured conversation
+│   ├── mock_analyzer.py        # simple one-shot sender
 │   └── replay.py               # re-parse stored raw messages
 ├── samples/messages.yaml       # real-shaped ASTM/HL7 payloads
-└── tests/test_pipeline.py      # 28 unit tests, no Oracle required
+└── tests/test_pipeline.py      # 36 unit tests, no Oracle required
 ```
 
 ## 5. Extending it
@@ -137,6 +167,9 @@ lis-middleware/
 | Garbage characters on serial | baud/parity mismatch | try `9600 7E1`, then `9600 8N1` |
 | Analyzer never sends | analyzer is waiting for an ACK | `app.ack_mode: MLLP` for HL7 analyzers |
 | Same result twice | analyzer re-transmits (normal) | dedupe keeps one row; see `status = DUPLICATE` in `lis_raw_messages` |
+| Analyzer sends ENQ, nothing after | the host is not answering ACK | our listener answers ACK on ENQ; check you are on the ASTM port |
+| `checksum mismatch` in the log | cable/parity problem or real line noise | the listener NAKs and the analyzer repeats; fix parity (7E1) |
+| Machine stops mid-transfer | it waits for a frame ACK | check the log for `bad block … -> NAK`; that is the retry path working |
 
 ## 7. Deploy as a service
 

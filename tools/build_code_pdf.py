@@ -126,22 +126,44 @@ def main() -> None:
     doc.code(snippet("database/db_writer.py", "    def is_duplicate", 20))
     doc.code(snippet("database/db_writer.py", "    def insert_results", 14))
 
-    # ------------------------------------------------------------------ 8
-    section(doc, "8 · Listener framing", "listeners/tcp_listener.py")
+    section(doc, "8 · The real wire: E1381", "core/e1381.py")
+    doc.para("This is the layer a browser demo hides. A real analyzer will not send a "
+             "message until it receives an ACK for its ENQ, and it repeats any frame whose "
+             "checksum the receiver rejects. `E1381Framer` is incremental, so a frame split "
+             "across TCP segments (or arriving slowly over 9600 baud) is assembled correctly, "
+             "and stray noise before `STX` is resynced instead of corrupting the block.")
+    doc.code(snippet("core/e1381.py", "def compute_checksum", 10))
+    doc.code(snippet("core/e1381.py", "    def feed", 40))
+
+    section(doc, "9 · Listener framing", "listeners/tcp_listener.py")
     doc.para("`_extract` turns a byte stream into messages: MLLP (`\\x0b…\\x1c`), ASTM "
              "(`\\x05`/`\\x03`), or bare text closed by the client. Whatever framing arrives, the "
              "analyzer gets `0x06` for success and `0x15` for a rejected message.")
     doc.code(snippet("listeners/tcp_listener.py", "    def _extract", 42))
 
-    # ------------------------------------------------------------------ 9
-    section(doc, "9 · Proving it works", "tests/test_pipeline.py")
-    doc.para("Twenty-eight tests cover the parsers, the sniffer, the validator, de-duplication, "
+    section(doc, "10 · Proving it works", "tests/test_pipeline.py")
+    doc.para("Thirty-six tests cover the parsers, the sniffer, the validator, de-duplication, "
              "the ACK modes and the error paths. No Oracle, no sockets, no lab instrument needed.")
     doc.code("python -m unittest discover -s tests -v\n"
              "  ...\n"
-             "  Ran 28 tests in 0.006s\n"
+             "  Ran 36 tests in 0.006s\n"
              "  OK", caption="test run")
     doc.code(snippet("tests/test_pipeline.py", "    def test_end_to_end_astm", 12))
+
+    section(doc, "11 · Testing against a real machine", "tools/device_sim.py, tools/sniff_com.py")
+    doc.para("`device_sim.py` is a lab instrument simulator at the byte level: it performs the "
+             "ENQ/ACK handshake, sends checksummed frames, honours NAK with a retry, and can "
+             "inject the faults only a cable produces (bad checksum, line noise, dropped "
+             "blocks). `sniff_com.py` captures the real analyzer's own bytes — over serial or "
+             "as a TCP tap — and `replay_capture.py` replays that capture against the "
+             "middleware, so the parser can be regression-tested with real machine data.")
+    doc.code(
+        "python tools/device_sim.py -s astm_cbc_normal -p 6661 --trace\n"
+        "python tools/device_sim.py -s astm_cbc_normal --fault checksum --fault-rate 0.4\n"
+        "python tools/sniff_com.py --port COM4 --baud 9600 --parity EVEN \\\n"
+        "       --tap 127.0.0.1:6661 --out logs/capture.jsonl\n"
+        "python tools/replay_capture.py logs/capture.jsonl --port 6661 --timing",
+        caption="three levels of realism: simulate → capture → replay")
 
     doc.space(6)
     doc.callout("Where to start reading", "Follow the order of this document: main.py → engine.py → "

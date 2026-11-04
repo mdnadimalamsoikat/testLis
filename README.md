@@ -23,6 +23,7 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 | [`lis-middleware/demo/`](lis-middleware/demo/) | Browser demo: send a message, watch parse → validate → store → ACK |
 | [`docs/PROJECT_GUIDE_BN.pdf`](docs/PROJECT_GUIDE_BN.pdf) | 10-page Bengali guide: architecture, schema, APEX, setup, deploy, troubleshooting |
 | [`docs/CODE_WALKTHROUGH.pdf`](docs/CODE_WALKTHROUGH.pdf) | The same pipeline explained code-first, with the real functions |
+| [`docs/REAL_DEVICE.md`](docs/REAL_DEVICE.md) | Honest guide: demo vs real analyzer, wire-level simulation, capturing the real machine's bytes (Bangla) |
 
 ## 60-second start (no Oracle needed)
 
@@ -30,18 +31,24 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 cd lis-middleware
 pip install -r requirements.txt
 
-python -m unittest discover -s tests -v     # 28 tests, no DB
+python -m unittest discover -s tests -v     # 36 tests, no DB
 python -m demo.app                          # http://localhost:8080
 ```
 
-Then send a message in the browser, or replay a real one over the wire:
+Then send a message in the browser, or drive the real wire protocol:
 
 ```bash
 python main.py --dry-run                    # listeners on 6661 (ASTM) / 6662 (HL7)
-python tools/mock_analyzer.py -s astm_cbc_normal -p 6661
-#  → 127.0.0.1:6661  397 bytes (ASTM)
-#  ← ACK (0x06)
+python tools/device_sim.py -s astm_cbc_normal -p 6661 --trace
+#  → <ENQ>            ← <ACK>
+#  → <STX>1H|\^&|…<ETX>?2   ← <ACK>   (×8 frames)
+#  → <EOT>
+#  RESULT: the middleware behaved like a real LIS endpoint ✅
 ```
+
+`device_sim` can also inject the faults a real cable produces
+(`--fault checksum|noise|drop`), and `tools/sniff_com.py` captures **your**
+analyzer's own bytes so you test against the machine, not against samples.
 
 ## For the real lab
 
@@ -60,6 +67,8 @@ systemd, and a troubleshooting table — are in the PDF guide.
   parser bug can be fixed and old messages replayed (`tools/replay.py`).
 * **Re-transmissions are safe:** unique key + pre-insert check; the analyzer
   still gets its ACK.
+* **Wire level:** ASTM E1381 handshake, checksums, NAK-retry and line-noise
+  resync are implemented and tested — that is the layer a demo HTTP form hides.
 * **Quality-control samples** (`QC…`, `CTRL…`, `CAL…`) are acknowledged but not
   stored as patient data.
 * This is integration software, not a certified medical device. It transports

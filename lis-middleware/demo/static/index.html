@@ -247,6 +247,13 @@
               <option value="HL7">HL7</option>
             </select>
           </div>
+          <div class="field">
+            <label for="framing">Wire framing</label>
+            <select id="framing">
+              <option value="AUTO">one shot (HTTP-style)</option>
+              <option value="E1381">E1381 handshake (real machine)</option>
+            </select>
+          </div>
         </div>
 
         <div class="field">
@@ -265,6 +272,18 @@
           <button class="btn-ghost" id="resetBtn">Reset store</button>
         </div>
         <div class="hint">Control characters are optional: <code>\x0b…\x1c</code> (MLLP) and <code>\x02…\x03</code> (ASTM) framing is auto-detected.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Wire trace — what the machine really does</h2>
+        <span class="badge" id="wireBadge">E1381</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        <div id="wireTrace" class="scroll-y" style="max-height:220px;padding:8px 14px">
+          <div class="empty">Send a message with framing = <b>E1381 handshake</b> to see the ENQ / ACK / frame / EOT dialogue.</div>
+        </div>
       </div>
     </div>
 
@@ -370,6 +389,7 @@ fetch("/api/state").then(r => r.json()).then((data) => {
 
   const first = data.analyzers[0];
   $("protocol").value = first ? first.protocol : "AUTO";
+  $("framing").value = "E1381";
   pickScenario(first ? first.scenario : "astm_cbc_normal");
   render(data);
   updatePipe();
@@ -407,16 +427,21 @@ async function send(times = 1) {
   setStages([], null);
   let last = null;
 
+  const framing = $("framing").value;
+  const endpoint = framing === "E1381" && times === 1 ? "/api/wire" : "/api/send";
   for (let i = 0; i < times; i++) {
     const t0 = performance.now();
     try {
-      const res = await fetch("/api/send", {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ raw, analyzer: $("analyzer").value, protocol: $("protocol").value }),
+        body: JSON.stringify({
+          raw, analyzer: $("analyzer").value, protocol: $("protocol").value, framing,
+        }),
       });
       last = await res.json();
       last._ms = Math.round(performance.now() - t0);
+      if (last.result) last = { ...last.result, _wire: last, _ms: last._ms };
     } catch (err) {
       btn.disabled = false;
       return toast("Request failed: " + err.message, true);
@@ -426,6 +451,25 @@ async function send(times = 1) {
   btn.disabled = false;
   showResponse(last, times);
   refresh();
+}
+
+function renderWire(wire) {
+  const el = $("wireTrace");
+  if (!wire || !wire.steps) { return; }
+  $("wireBadge").textContent = wire.mode === "e1381" ? `E1381 · ${wire.frames} frames` : "one shot";
+  el.innerHTML = wire.steps.map((step) => {
+    const isTx = step.dir === "tx";
+    const color = isTx ? "var(--accent2)" : "var(--accent)";
+    const arrow = isTx ? "analyzer →" : "← middleware";
+    return `<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid rgba(36,52,79,.5)">
+      <span style="font-family:var(--mono);font-size:10.5px;color:${color};min-width:84px">${arrow}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11.5px;font-weight:600">${esc(step.label)}</div>
+        ${step.text ? `<div style="font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:pre-wrap;word-break:break-all">${esc(step.text)}</div>` : ""}
+        ${step.note ? `<div style="font-size:10.5px;color:var(--muted)">${esc(step.note)}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("");
 }
 
 function setStages(done, failedAt) {
@@ -461,6 +505,8 @@ function showResponse(res, times) {
 
   const done = res.status === "ERROR" ? [] : [0, 1, 2, 3, 4];
   setStages(done, res.status === "ERROR" ? 2 : null);
+
+  if (res._wire) renderWire(res._wire);
 
   const ack = res.ack || "";
   $("ackPayload").textContent = ack
@@ -561,6 +607,7 @@ $("resetBtn").onclick = async () => {
   $("ackPill").className = "pill idle";
   $("ackText").innerHTML = "Store cleared. Send a message to start again.";
   $("ackPayload").textContent = "—";
+  $("wireTrace").innerHTML = `<div class="empty">Store cleared. Send again to see the handshake.</div>`;
   setStages([], null);
   document.querySelectorAll(".pipe-step").forEach(p => p.classList.remove("active", "error"));
   refresh();
