@@ -25,6 +25,7 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 | [`docs/CODE_WALKTHROUGH.pdf`](docs/CODE_WALKTHROUGH.pdf) | The same pipeline explained code-first, with the real functions |
 | [`docs/REAL_DEVICE.md`](docs/REAL_DEVICE.md) | Honest guide: demo vs real analyzer, wire-level simulation, capturing the real machine's bytes (Bangla) |
 | [`docs/LAB_DAY.md`](docs/LAB_DAY.md) | **Start here for the real thing** — 3-day plan (simulate → rehearse → lab), every machine setting you must change, other simulators, rollback (Bangla) |
+| [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md) | **APEX + 19c যদি আগেই ইনস্টল করা থাকে** — এক কমান্ডে টেবিল, পেজ, সার্ভিস, ২ মিনিটের যাচাই (Bangla) |
 | [`docs/APEX_CONTROL.md`](docs/APEX_CONTROL.md) | **The lab never sees Python** — install the control tables, build the two APEX pages, every field's rules, who-sees-what (Bangla) |
 
 ## 60-second start (no Oracle needed)
@@ -33,7 +34,7 @@ Roche Cobas ──Serial──┴──▶│  LIS Middleware    │──▶│
 cd lis-middleware
 pip install -r requirements.txt
 
-python -m unittest discover -s tests -v     # 50 tests, no DB
+python -m unittest discover -s tests -v     # 53 tests, no DB
 python -m demo.app                          # http://localhost:8080
 ```
 
@@ -66,7 +67,8 @@ writes back `applied` or `last_error`. A mistyped port never reaches a live
 socket. Setup: [`docs/APEX_CONTROL.md`](docs/APEX_CONTROL.md).
 
 ```bash
-sqlplus lis_user/password@//192.168.1.100:1521/ORCL @lis-middleware/database/apex_install.sql
+# install the tables + control plane in one go (no Oracle Client needed)
+python lis-middleware/tools/apex_setup.py --user lis_user --service XEPDB1 --write-config
 python lis-middleware/service.py        # APEX-driven, hot reload (service.py, not main.py)
 ```
 

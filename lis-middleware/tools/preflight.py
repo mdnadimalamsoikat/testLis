@@ -179,8 +179,9 @@ def check_database(config: Dict[str, Any]) -> None:
     host = str(db.get("host", ""))
     port = int(db.get("port", 1521))
     if not _is_open(host, port, timeout=1.5):
-        record(FAIL, "oracle", f"no listener at {host}:{port}",
-               "check the DB host/port, the firewall, and that the listener is up")
+        hint = (f'"lsnrctl status" and "sqlplus user/pass@//{host}:{port}/{db.get("service_name", "")}"'
+                " — XE uses XEPDB1, 19c uses ORCLPDB1")
+        record(FAIL, "oracle", f"no listener at {host}:{port}", hint)
         return
     record(PASS, "oracle", f"TCP reachable at {host}:{port}")
 
@@ -201,7 +202,6 @@ def check_database(config: Dict[str, Any]) -> None:
 
     record(PASS, "oracle", f"connected as {db_obj.username} to {db_obj.dsn}")
     schema = db_obj.schema
-    global _ORACLE
     _ORACLE = db_obj
     try:
         with db_obj.cursor() as cur:
@@ -324,6 +324,8 @@ def check_apex(db, config: dict) -> list:
 
 
 def main() -> int:
+    global _ORACLE
+    _ORACLE = None
     parser = argparse.ArgumentParser(description="Pre-flight checks for the LIS middleware")
     parser.add_argument("--config", default=str(ROOT / "config" / "config.yaml"))
     parser.add_argument("--offline", action="store_true", help="skip the Oracle checks")

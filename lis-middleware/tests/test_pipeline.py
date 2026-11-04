@@ -7,6 +7,7 @@ Unit tests — no Oracle, no sockets. Run from lis-middleware/:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 import unittest
 
@@ -563,6 +564,51 @@ class TestSupervisorHotReload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([s["name"] for s in control.statuses], ["A"])
         self.assertTrue(control.statuses[0]["running"])
         await sup.shutdown()
+
+
+class TestInstallerTools(unittest.TestCase):
+    """tools/apex_setup.py + tools/install_sql.py must never mangle the SQL."""
+
+    def _sql(self, name: str) -> str:
+        path = Path(__file__).resolve().parents[1] / "database" / name
+        return path.read_text(encoding="utf-8")
+
+    def test_apex_setup_splits_every_statement(self):
+        from tools.apex_setup import split_statements
+        statements = split_statements(self._sql("apex_install.sql"))
+        tables = [s for s in statements if s.upper().startswith("CREATE TABLE")]
+        triggers = [s for s in statements if "TRIGGER" in s.upper()[:40]]
+        inserts = [s for s in statements if s.upper().startswith("INSERT")]
+        self.assertEqual(len(tables), 3)          # lis_config, code map, commands
+        self.assertEqual(len(triggers), 2)
+        self.assertEqual(len(inserts), 12)        # 3 analyzers + 5 settings + 4 code maps
+        # no statement may swallow the next one
+        for statement in statements:
+            self.assertEqual(statement.upper().count("CREATE "), 1 if statement.upper().startswith("CREATE") else 0,
+                             statement[:80])
+        # PL/SQL blocks keep their END;
+        for trigger in triggers:
+            self.assertTrue(trigger.rstrip().endswith("END;"), trigger[-60:])
+
+    def test_install_sql_blocks_are_terminated_for_sqlplus(self):
+        from tools.install_sql import split_blocks
+        blocks = split_blocks(self._sql("apex_install.sql"))
+        plsql = [text for text, is_plsql in blocks if is_plsql]
+        self.assertEqual(len(plsql), 2)
+        for text in plsql:
+            self.assertTrue(text.rstrip().endswith("END;"))
+        for text, is_plsql in blocks:
+            if not is_plsql:
+                self.assertTrue(text.rstrip().endswith(";") or text.strip().upper() == "COMMIT;")
+                self.assertNotEqual(text.strip(), "/")
+
+    def test_schema_sql_has_the_result_tables(self):
+        from tools.apex_setup import split_statements
+        statements = split_statements(self._sql("schema.sql"))
+        creates = [s for s in statements if s.upper().startswith("CREATE TABLE")]
+        names = {s.split("(", 1)[0].split()[-1].lower() for s in creates}
+        self.assertEqual(names, {"lis_raw_messages", "lab_results", "lis_audit_log",
+                                 "lis_analyzer_status"})
 
 
 if __name__ == "__main__":

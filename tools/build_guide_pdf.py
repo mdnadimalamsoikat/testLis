@@ -72,7 +72,7 @@ def cover(doc: Document) -> None:
         ["৪", "ডেটাবেস স্কিমা", "টেবিল, ইনডেক্স, APEX ভিউ"],
         ["৫", "Oracle APEX", "রিপোর্ট, ফর্ম, critical alert + APEX থেকে সব নিয়ন্ত্রণ"],
         ["৬", "সেটআপ ও ল্যাব ডে", "স্কিমা → config → preflight → মেশিন সেটিং → ল্যাবের ক্রম"],
-        ["৭", "টেস্ট", "৫০টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
+        ["৭", "টেস্ট", "৫৩টি ইউনিট টেস্ট, মক অ্যানালাইজার, ব্রাউজার ডেমো"],
         ["৮", "ডিপ্লয়মেন্ট", "Windows সার্ভিস, Linux systemd"],
         ["৯", "সমস্যা ও সমাধান", "লক্ষণ → কারণ → সমাধান"],
         ["১০", "চেকলিস্ট", "প্রোডাকশনে যাওয়ার আগে"],
@@ -184,7 +184,7 @@ def section_code(doc: Document) -> None:
         "├── ops/                    # systemd / NSSM service installers\n"
         "├── tools/{device_sim,preflight,sniff_com,replay_capture}.py\n"
         "├── samples/messages.yaml   # real-shaped ASTM / HL7 payloads\n"
-        "└── tests/test_pipeline.py  # 50 tests, no Oracle needed"
+        "└── tests/test_pipeline.py  # 53 tests, no Oracle needed"
     )
 
     doc.h2("ASTM মানে কী — এক নজরে", "৩.২")
@@ -378,6 +378,15 @@ def section_apex(doc: Document) -> None:
     )
 
     doc.h2("একবারের ইনস্টল", "৫.৬.১")
+    doc.para("**সবচেয়ে সহজ:** এক কমান্ডে সব টেবিল, ভিউ, ট্রিগার আর ডেমো ডেটা (Oracle Client লাগে না):", size=9)
+    doc.code("# APEX + 19c আগেই ইনস্টল করা থাকলে এটাই যথেষ্ট\n"
+             "pip install oracledb\n"
+             "python tools/apex_setup.py --user lis_user --service XEPDB1 --write-config\n"
+             "python tools/apex_setup.py --verify-only      # যেকোনো সময় আবার যাচাই\n\n"
+             "# অথবা SQL*Plus দিয়ে, statement ধরে ধরে রিপোর্ট সহ\n"
+             "python tools/install_sql.py --sqlplus \"sqlplus -S lis_user/pass@//localhost:1521/XEPDB1\"")
+    doc.para("আয়োজনের বিস্তারিত (service name কোথায় দেখবেন, APEX কোন PDB-তে, ২ মিনিটের যাচাই): "
+             "`docs/LOCAL_SETUP.md`। হাতে করার ধাপগুলো:", size=9)
     doc.numbered([
         "`sqlplus lis_user/pass@//host:1521/ORCL @database/schema.sql` — রেজাল্ট টেবিল ও ভিউ।",
         "`sqlplus lis_user/pass@//host:1521/ORCL @database/apex_install.sql` — কন্ট্রোল টেবিল "
@@ -552,7 +561,7 @@ def section_test(doc: Document) -> None:
 
     doc.h2("ইউনিট টেস্ট — Oracle ছাড়াই", "৭.১")
     doc.code("python -m unittest discover -s tests -v\n"
-             "# 50 tests — ASTM, HL7, E1381 framing, validator, dedupe, ACK, hot reload")
+             "# 53 tests — ASTM, HL7, E1381 framing, validator, dedupe, ACK, hot reload")
     doc.para("টেস্টগুলো আসল ফরম্যাটের নমুনা দিয়ে চলে (samples/messages.yaml), তাই parser "
              "বদলালে সাথে সাথেই বোঝা যায় কিছু ভেঙেছে কি না।")
 

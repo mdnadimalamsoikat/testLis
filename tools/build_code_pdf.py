@@ -142,11 +142,11 @@ def main() -> None:
     doc.code(snippet("listeners/tcp_listener.py", "    def _extract", 42))
 
     section(doc, "10 · Proving it works", "tests/test_pipeline.py")
-    doc.para("Fifty tests cover the parsers, the sniffer, the validator, de-duplication, "
+    doc.para("Fifty-three tests cover the parsers, the sniffer, the validator, de-duplication, "
              "the ACK modes and the error paths. No Oracle, no sockets, no lab instrument needed.")
     doc.code("python -m unittest discover -s tests -v\n"
              "  ...\n"
-             "  Ran 50 tests in 0.068s\n"
+             "  Ran 53 tests in 0.069s\n"
              "  OK", caption="test run")
     doc.code(snippet("tests/test_pipeline.py", "    def test_end_to_end_astm", 12))
 

@@ -38,7 +38,7 @@ cd lis-middleware
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-python -m unittest discover -s tests -v                # 50 tests, no DB required
+python -m unittest discover -s tests -v                # 53 tests, no DB required
 python -m demo.app                                     # browser demo on :8080
 ```
 
@@ -77,12 +77,22 @@ APEX form (lab staff)  ──►  lis_config / lis_commands  ──►  service.
                      ONLINE · last message · last_error
 ```
 
-One-time setup (DBA, 10 minutes):
+One-time setup — two options, same result:
 
 ```bash
-sqlplus lis_user/password@//192.168.1.100:1521/ORCL @database/schema.sql        # 1. results tables
-sqlplus lis_user/password@//192.168.1.100:1521/ORCL @database/apex_install.sql  # 2. control tables
+# A. one command, no Oracle Client needed (recommended)
+pip install oracledb
+python tools/apex_setup.py --user lis_user --service XEPDB1 --write-config
+python tools/apex_setup.py --verify-only          # re-check any time
+
+# B. through SQL*Plus, statement by statement (shows the exact failing SQL)
+sqlplus lis_user/password@//192.168.1.100:1521/ORCL @database/schema.sql
+sqlplus lis_user/password@//192.168.1.100:1521/ORCL @database/apex_install.sql
+python tools/install_sql.py --sqlplus "sqlplus -S lis_user/password@//localhost:1521/XEPDB1"
 ```
+
+Already running APEX + 19c on your own machine? [`../docs/LOCAL_SETUP.md`](../docs/LOCAL_SETUP.md)
+is the 20-minute walkthrough for exactly that case.
 
 Then build the pages (`docs/APEX_CONTROL.md`, Bangla, §2 shows every field and
 LOV) and start the service — **no analyzer settings in any file**:
@@ -210,6 +220,8 @@ lis-middleware/
 │   ├── install_service_windows.ps1  # NSSM installer (Windows service, auto-restart)
 │   └── healthcheck.sh               # is the service alive, is the port open?
 ├── tools/
+│   ├── apex_setup.py           # one-command install + verify (python-oracledb)
+│   ├── install_sql.py          # same install through SQL*Plus, per-statement reporting
 │   ├── preflight.py            # go/no-go checks before the lab trip (incl. APEX tables)
 │   ├── device_sim.py           # wire-level analyzer simulator (E1381/MLLP + faults)
 │   ├── sniff_com.py            # capture real analyzer traffic (serial or TCP tap)
@@ -217,7 +229,7 @@ lis-middleware/
 │   ├── mock_analyzer.py        # simple one-shot sender
 │   └── replay.py               # re-parse stored raw messages
 ├── samples/messages.yaml       # real-shaped ASTM/HL7 payloads
-└── tests/test_pipeline.py      # 50 unit tests, no Oracle required
+└── tests/test_pipeline.py      # 53 unit tests, no Oracle required
 ```
 
 ## 8. Extending it
