@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------
+# Real-shaped sample payloads — captured formats, not invented ones.
+# Used by tests/ and by tools/mock_analyzer.py
+# ---------------------------------------------------------------
+
+# --- ASTM (Sysmex XN-1000 style), 4 CBC tests --------------------
+astm_cbc_normal: |
+  H|\^&|||Sysmex^XN-1000^A1234||||||||E1394-97|20240115103000
+  P|1||2024001234||Karim, Ahmed||19850615|M
+  O|1|SAMPLE-0001||^^^CBC|R||||||||||||||||||F
+  R|1|^^^WBC^6690-2|7.5|10*3/uL|4.0-11.0|N||F||||20240115103000
+  R|2|^^^RBC^789-8|5.2|10*6/uL|4.5-5.5|N||F||||20240115103000
+  R|3|^^^HGB^718-7|14.5|g/dL|13.0-17.0|N||F||||20240115103000
+  R|4|^^^PLT^777-3|250|10*3/uL|150-400|N||F||||20240115103000
+  L|1|N
+
+# --- ASTM with abnormal + critical results ----------------------
+astm_cbc_abnormal: |
+  H|\^&|||Sysmex^XN-1000^A1234||||||||E1394-97|20240115104500
+  P|1||2024005678||Rahman, Nasrin||19900120|F
+  O|1|SAMPLE-0002||^^^CBC|R
+  R|1|^^^WBC^6690-2|18.9|10*3/uL|4.0-11.0|H||F
+  R|2|^^^HGB^718-7|7.2|g/dL|12.0-15.0|LL||F
+  R|3|^^^PLT^777-3|95|10*3/uL|150-400|L||F
+  L|1|N
+
+# --- HL7 v2.5.1 ORU^R01 (Mindray BS-240 style) -------------------
+hl7_biochem: |
+  MSH|^~\&|MINDRAY|BS240|LISMW|HOSPITAL|20240115110000||ORU^R01|MSG00042|P|2.5.1
+  PID|1||2024009012||Akter^Fatema||19780311|F
+  OBR|1||SAMPLE-0003|CHEM7
+  OBX|1|NM|GLU^Glucose^2345-7||5.4|mmol/L|3.9-5.5|N|||F|||20240115105900
+  OBX|2|NM|CREA^Creatinine^2160-0||1.1|mg/dL|0.6-1.2|N|||F|||20240115105900
+  OBX|3|NM|ALT^Alanine aminotransferase^1742-6||68|U/L|10-40|H|||F|||20240115105900
+  OBX|4|NM|AST^Aspartate aminotransferase^1920-8||35|U/L|10-40|N|||F|||20240115105900
+
+# --- HL7 with a critical value ---------------------------------
+hl7_critical: |
+  MSH|^~\&|MINDRAY|BS240|LISMW|HOSPITAL|20240115111500||ORU^R01|MSG00043|P|2.5.1
+  PID|1||2024009013||Hossain^Kamal||19650702|M
+  OBR|1||SAMPLE-0004|CHEM7
+  OBX|1|NM|GLU^Glucose^2345-7||28.6|mmol/L|3.9-5.5|HH|||F|||20240115111400
+  OBX|2|NM|CREA^Creatinine^2160-0||4.8|mg/dL|0.6-1.2|HH|||F|||20240115111400
+
+# --- Quality-control sample (config says ignore these) ---------
+astm_qc_sample: |
+  H|\^&|||Sysmex^XN-1000^A1234||||||||E1394-97|20240115113000
+  P|1||QC-LEVEL2||Control, Normal|||N
+  O|1|QC-LEVEL2||^^^CBC|R
+  R|1|^^^WBC^6690-2|7.1|10*3/uL|4.0-11.0|N||F
+  R|2|^^^HGB^718-7|13.9|g/dL|13.0-17.0|N||F
+  L|1|N
+
+# --- Garbage: what a wrong-protocol channel looks like ----------
+broken_message: |
+  H|\^&|||Sysmex
+  P|1||
+  R|1|^^^|
+
+# --- Instrument that packs value+unit in one field --------------
+astm_merged_unit: |
+  H|\^&|||Roche^Cobas c311^R9||||||||E1394-97|20240115120000
+  P|1||2024004321||Islam, Rafi||20010203|M
+  O|1|SAMPLE-0005||^^^CHEM|R
+  R|1|^^^GLU|5,8 mmol/L|||N||F
+  R|2|^^^ALT|>150 U/L|||H||F
+  L|1|N

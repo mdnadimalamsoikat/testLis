@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LIS Middleware — Analyzer → Oracle → APEX</title>
+<style>
+  :root {
+    --bg: #0b1120;
+    --bg2: #111a2e;
+    --panel: #16213a;
+    --panel2: #1c2942;
+    --line: #24344f;
+    --txt: #e6edf7;
+    --muted: #8b9dbb;
+    --accent: #3ddc97;
+    --accent2: #4c9aff;
+    --warn: #ffb020;
+    --danger: #ff5c6c;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: radial-gradient(1200px 600px at 15% -10%, #17304f 0%, var(--bg) 55%) no-repeat, var(--bg);
+    color: var(--txt); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    font-size: 14px; line-height: 1.5; min-height: 100vh;
+  }
+  header { padding: 22px 26px 8px; }
+  .title-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px; flex: 0 0 auto;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: grid; place-items: center; font-weight: 800; color: #06121f; font-size: 18px;
+    box-shadow: 0 8px 24px rgba(61,220,151,.25);
+  }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -.2px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .badge {
+    font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--muted); white-space: nowrap;
+  }
+  .badge.live { color: var(--accent); border-color: rgba(61,220,151,.4); background: rgba(61,220,151,.08); }
+
+  /* pipeline strip */
+  .pipeline { display: flex; align-items: stretch; gap: 8px; padding: 16px 26px 6px; flex-wrap: wrap; }
+  .pipe-step {
+    flex: 1 1 150px; min-width: 140px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px 12px; position: relative; transition: .25s;
+  }
+  .pipe-step .k { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .pipe-step .v { font-weight: 600; font-size: 13px; margin-top: 3px; }
+  .pipe-step .s { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+  .pipe-step.active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(61,220,151,.35), 0 8px 22px rgba(61,220,151,.12); }
+  .pipe-step.error { border-color: var(--danger); box-shadow: 0 0 0 1px rgba(255,92,108,.4); }
+  .arrow { align-self: center; color: #2f4668; font-size: 18px; }
+
+  main { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.1fr); gap: 18px; padding: 10px 26px 40px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .card + .card { margin-top: 16px; }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--panel2);
+  }
+  .card-head h2 { font-size: 13px; margin: 0; letter-spacing: .02em; font-weight: 650; }
+  .card-body { padding: 14px; }
+
+  label { display: block; font-size: 11.5px; color: var(--muted); margin: 0 0 5px; letter-spacing: .03em; }
+  select, textarea, input {
+    width: 100%; background: #0d1626; color: var(--txt); border: 1px solid var(--line);
+    border-radius: 9px; padding: 9px 10px; font-family: var(--mono); font-size: 12px; outline: none;
+  }
+  select:focus, textarea:focus { border-color: var(--accent2); }
+  textarea { resize: vertical; line-height: 1.55; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row + .row, .field + .field { margin-top: 10px; }
+
+  button {
+    border: 1px solid transparent; border-radius: 9px; padding: 9px 15px; font-size: 12.5px;
+    font-weight: 650; cursor: pointer; font-family: inherit; transition: .15s;
+  }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), #29b47c); color: #05231a; }
+  .btn-primary:hover { filter: brightness(1.07); }
+  .btn-ghost { background: transparent; border-color: var(--line); color: var(--muted); }
+  .btn-ghost:hover { color: var(--txt); border-color: #3a5273; }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip {
+    font-size: 11px; padding: 5px 9px; border-radius: 8px; background: #0d1626;
+    border: 1px solid var(--line); color: var(--muted); cursor: pointer;
+  }
+  .chip:hover { border-color: var(--accent2); color: var(--txt); }
+  .chip.on { border-color: var(--accent); color: var(--accent); background: rgba(61,220,151,.07); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .stat { background: #0d1626; border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; }
+  .stat .n { font-size: 21px; font-weight: 700; letter-spacing: -.5px; }
+  .stat .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .stat.crit .n { color: var(--danger); }
+  .stat.ok .n { color: var(--accent); }
+
+  pre, code { font-family: var(--mono); }
+  pre {
+    margin: 0; background: #0a1322; border: 1px solid var(--line); border-radius: 10px;
+    padding: 11px 12px; font-size: 11.5px; line-height: 1.6; overflow: auto; max-height: 300px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  pre .r { color: #ffb3bb; } pre .h { color: #9ecbff; } pre .o { color: #ffd580; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); padding: 7px 8px; border-bottom: 1px solid var(--line); font-weight: 600;
+    position: sticky; top: 0; background: var(--panel);
+  }
+  td { padding: 7px 8px; border-bottom: 1px solid rgba(36,52,79,.55); font-family: var(--mono); font-size: 11.5px; }
+  tbody tr:hover { background: rgba(76,154,255,.06); }
+  .flag { padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 700; }
+  .flag.N { background: rgba(139,157,187,.15); color: var(--muted); }
+  .flag.H { background: rgba(255,176,32,.16); color: var(--warn); }
+  .flag.L { background: rgba(76,154,255,.16); color: var(--accent2); }
+  .flag.HH, .flag.LL, .flag.C { background: rgba(255,92,108,.16); color: var(--danger); }
+  .flag.A { background: rgba(255,176,32,.16); color: var(--warn); }
+
+  .table-wrap { max-height: 320px; overflow: auto; }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 18px 6px; text-align: center; }
+
+  .ack {
+    display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 11px;
+    background: #0d1626; border: 1px solid var(--line);
+  }
+  .ack .pill { font-family: var(--mono); font-weight: 700; font-size: 12px; padding: 4px 10px; border-radius: 7px; }
+  .ack .pill.ok { background: rgba(61,220,151,.14); color: var(--accent); }
+  .ack .pill.bad { background: rgba(255,92,108,.14); color: var(--danger); }
+  .ack .pill.idle { background: rgba(139,157,187,.14); color: var(--muted); }
+  .ack .txt { font-size: 12px; color: var(--muted); flex: 1; }
+  .ack .txt b { color: var(--txt); font-weight: 600; }
+
+  .stage { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .stage .line { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #2c4160; flex: 0 0 auto; }
+  .line.done .dot { background: var(--accent); box-shadow: 0 0 8px rgba(61,220,151,.7); }
+  .line.done { color: var(--txt); }
+  .line.fail .dot { background: var(--danger); box-shadow: 0 0 8px rgba(255,92,108,.7); }
+  .line.fail { color: #ffc2c8; }
+  .line .ms { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+
+  .scroll-y { max-height: 260px; overflow-y: auto; }
+  .msg { border-bottom: 1px solid rgba(36,52,79,.55); padding: 9px 4px; }
+  .msg:last-child { border-bottom: none; }
+  .msg .mh { display: flex; gap: 8px; align-items: center; font-size: 11.5px; }
+  .msg .mh .name { font-weight: 600; }
+  .msg .mh .time { color: var(--muted); font-family: var(--mono); font-size: 10.5px; margin-left: auto; }
+  .msg .raw { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 4px;
+    white-space: pre-wrap; word-break: break-all; max-height: 44px; overflow: hidden; }
+  .status { font-size: 10px; padding: 2px 7px; border-radius: 5px; font-family: var(--mono); font-weight: 700; }
+  .status.PARSED { background: rgba(61,220,151,.14); color: var(--accent); }
+  .status.DUPLICATE { background: rgba(255,176,32,.14); color: var(--warn); }
+  .status.ERROR { background: rgba(255,92,108,.14); color: var(--danger); }
+  .status.IGNORED { background: rgba(139,157,187,.14); color: var(--muted); }
+
+  .toast {
+    position: fixed; right: 20px; bottom: 20px; background: var(--panel2); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 10px; padding: 11px 15px; font-size: 12.5px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.45); opacity: 0; transform: translateY(8px); transition: .25s;
+    pointer-events: none; max-width: 340px;
+  }
+  .toast.show { opacity: 1; transform: none; }
+  .toast.bad { border-left-color: var(--danger); }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .hint code { background: #0d1626; padding: 1px 5px; border-radius: 4px; }
+  .tabs { display: flex; gap: 4px; }
+  .tab { font-size: 11.5px; padding: 5px 10px; border-radius: 7px; color: var(--muted); cursor: pointer; border: 1px solid transparent; }
+  .tab.on { background: #0d1626; border-color: var(--line); color: var(--txt); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-row">
+    <div class="logo">LIS</div>
+    <div>
+      <h1>LIS Middleware — Analyzer → Oracle → APEX</h1>
+      <div class="sub">Run the real ingest pipeline in your browser: ASTM / HL7 payload → parse → validate → dedupe → store → ACK</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <span class="badge live" id="healthBadge">● pipeline ready</span>
+      <span class="badge" id="dbBadge">store: in-memory (demo)</span>
+    </div>
+  </div>
+</header>
+
+<div class="pipeline">
+  <div class="pipe-step" id="pipe-analyzer">
+    <div class="k">1 · Analyzer</div>
+    <div class="v" id="pipeAnalyzerName">Sysmex XN-1000</div>
+    <div class="s" id="pipeAnalyzerConn">ASTM · TCP:6661</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="pipe-step" id="pipe-parse">
+    <div class="k">2 · Parse</div>
+    <div class="v">ASTM / HL7</div>
+    <div class="s" id="pipeParseConn">sniffing protocol</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="pipe-step" id="pipe-validate">
+    <div class="k">3 · Validate</div>
+    <div class="v">required · flags</div>
+    <div class="s" id="pipeValidateConn">critical = C/HH/LL</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="pipe-step" id="pipe-store">
+    <div class="k">4 · Store</div>
+    <div class="v">lab_results</div>
+    <div class="s" id="pipeStoreConn">dedupe on sample+test</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="pipe-step" id="pipe-apex">
+    <div class="k">5 · APEX</div>
+    <div class="v">reports + alerts</div>
+    <div class="s" id="pipeApexConn">v_critical_results</div>
+  </div>
+</div>
+
+<main>
+  <!-- ============ left column ============ -->
+  <section>
+    <div class="card">
+      <div class="card-head">
+        <h2>Send a message</h2>
+        <span class="badge" id="scenarioBadge">ASTM</span>
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <div class="field">
+            <label for="analyzer">Analyzer</label>
+            <select id="analyzer"></select>
+          </div>
+          <div class="field">
+            <label for="protocol">Protocol on channel</label>
+            <select id="protocol">
+              <option value="AUTO">AUTO (sniff)</option>
+              <option value="ASTM">ASTM</option>
+              <option value="HL7">HL7</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Sample scenario</label>
+          <div class="chips" id="scenarios"></div>
+        </div>
+
+        <div class="field">
+          <label for="raw">Raw payload (edit it — break it — resend)</label>
+          <textarea id="raw" rows="12" spellcheck="false"></textarea>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn-primary" id="sendBtn">▶ Send to middleware</button>
+          <button class="btn-ghost" id="repeatBtn">×3 re-transmit (dedupe test)</button>
+          <button class="btn-ghost" id="resetBtn">Reset store</button>
+        </div>
+        <div class="hint">Control characters are optional: <code>\x0b…\x1c</code> (MLLP) and <code>\x02…\x03</code> (ASTM) framing is auto-detected.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Last message — result of the ACK</h2></div>
+      <div class="card-body">
+        <div class="ack">
+          <span class="pill idle" id="ackPill">IDLE</span>
+          <div class="txt" id="ackText">Nothing sent yet. Press <b>Send to middleware</b>.</div>
+          <span class="badge" id="ackMode">ASTM ACK</span>
+        </div>
+        <div class="stage" id="stages"></div>
+        <div class="field" style="margin-top:14px">
+          <label>Reply sent back to the analyzer</label>
+          <pre id="ackPayload">—</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ right column ============ -->
+  <section>
+    <div class="card">
+      <div class="card-head"><h2>Database</h2><span class="badge" id="dbMode">in-memory</span></div>
+      <div class="card-body">
+        <div class="stats">
+          <div class="stat ok"><div class="n" id="stTotal">0</div><div class="l">results</div></div>
+          <div class="stat"><div class="n" id="stToday">0</div><div class="l">today</div></div>
+          <div class="stat"><div class="n" id="stAbnormal">0</div><div class="l">abnormal</div></div>
+          <div class="stat crit"><div class="n" id="stCritical">0</div><div class="l">critical</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>lab_results</h2>
+        <div class="tabs">
+          <div class="tab on" data-view="results">results</div>
+          <div class="tab" data-view="samples">per sample</div>
+          <div class="tab" data-view="messages">raw messages</div>
+        </div>
+      </div>
+      <div class="card-body" style="padding:0">
+        <div class="table-wrap"><div id="tableView"></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Test code mapping (config.yaml)</h2></div>
+      <div class="card-body">
+        <div class="chips" id="codeMap"></div>
+        <div class="hint">Machine codes on the left are rewritten to your LIS report codes (e.g. <code>HGB → HB</code>) before insert.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const state = { scenarios: [], analyzers: [], selected: null, lastRaw: "", view: "results", data: null };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function toast(msg, bad = false) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.className = "toast show" + (bad ? " bad" : "");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => (el.className = "toast"), 3200);
+}
+
+/* ---------------- boot ---------------- */
+fetch("/api/state").then(r => r.json()).then((data) => {
+  state.scenarios = data.scenarios;
+  state.analyzers = data.analyzers;
+  state.data = data;
+
+  const sel = $("analyzer");
+  sel.innerHTML = data.analyzers.map(a =>
+    `<option value="${esc(a.name)}">${esc(a.brand)} ${esc(a.model)} · ${esc(a.protocol)}/${esc(a.connection_type)}</option>`
+  ).join("");
+  sel.onchange = () => {
+    const a = data.analyzers.find(x => x.name === sel.value);
+    if (a) {
+      $("protocol").value = a.protocol;
+      pickScenario(a.scenario);
+    }
+    updatePipe();
+  };
+
+  $("scenarios").innerHTML = data.scenarios
+    .map(s => `<span class="chip" data-key="${esc(s.key)}">${esc(s.label)}</span>`).join("");
+  document.querySelectorAll("#scenarios .chip").forEach(chip => {
+    chip.onclick = () => pickScenario(chip.dataset.key);
+  });
+
+  $("codeMap").innerHTML = Object.entries(data.test_code_map).map(([k, v]) =>
+    `<span class="chip" style="cursor:default">${esc(k)} <span style="color:var(--accent)">→</span> ${esc(v)}</span>`
+  ).join("");
+
+  const first = data.analyzers[0];
+  $("protocol").value = first ? first.protocol : "AUTO";
+  pickScenario(first ? first.scenario : "astm_cbc_normal");
+  render(data);
+  updatePipe();
+});
+
+function updatePipe() {
+  const name = $("analyzer").value;
+  const a = state.analyzers.find(x => x.name === name);
+  if (!a) return;
+  $("pipeAnalyzerName").textContent = `${a.brand} ${a.model}`;
+  $("pipeAnalyzerConn").textContent = `${a.protocol} · ${a.connection_type}:${a.port}`;
+}
+
+function pickScenario(key) {
+  const s = state.scenarios.find(x => x.key === key);
+  if (!s) return;
+  state.selected = key;
+  $("raw").value = s.raw.trim();
+  $("scenarioBadge").textContent = `${s.protocol} · ${s.lines} lines`;
+  document.querySelectorAll("#scenarios .chip").forEach(c =>
+    c.classList.toggle("on", c.dataset.key === key));
+  const proto = s.protocol;
+  const a = state.analyzers.find(x => x.protocol === proto);
+  if (a) { $("analyzer").value = a.name; updatePipe(); }
+  $("protocol").value = proto;
+}
+
+/* ---------------- sending ---------------- */
+async function send(times = 1) {
+  const raw = $("raw").value;
+  if (!raw.trim()) return toast("Payload is empty", true);
+
+  const btn = $("sendBtn");
+  btn.disabled = true;
+  setStages([], null);
+  let last = null;
+
+  for (let i = 0; i < times; i++) {
+    const t0 = performance.now();
+    try {
+      const res = await fetch("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raw, analyzer: $("analyzer").value, protocol: $("protocol").value }),
+      });
+      last = await res.json();
+      last._ms = Math.round(performance.now() - t0);
+    } catch (err) {
+      btn.disabled = false;
+      return toast("Request failed: " + err.message, true);
+    }
+  }
+
+  btn.disabled = false;
+  showResponse(last, times);
+  refresh();
+}
+
+function setStages(done, failedAt) {
+  const steps = [
+    ["Raw message received", "framing stripped, stored verbatim"],
+    ["Protocol detected", "ASTM / HL7 sniff"],
+    ["Parsed", "records → result rows"],
+    ["Validated", "required fields + flags"],
+    ["Stored in lab_results", "duplicates skipped"],
+  ];
+  $("stages").innerHTML = steps.map((s, i) => {
+    const cls = failedAt === i ? "fail" : (done.includes(i) ? "done" : "");
+    return `<div class="line ${cls}"><span class="dot"></span><span>${s[0]}</span>
+      <span class="ms">${cls === "done" ? "ok" : cls === "fail" ? "failed" : s[1]}</span></div>`;
+  }).join("");
+}
+
+function showResponse(res, times) {
+  const ok = !!res.ok;
+  $("ackPill").textContent = ok ? "ACK" : "NAK";
+  $("ackPill").className = "pill " + (ok ? "ok" : "bad");
+  $("ackMode").textContent = (res.ack_mode === "MLLP" ? "MLLP ACK" : "ASTM ACK");
+
+  const proto = res.detected_protocol || "?";
+  const note = res.status === "DUPLICATE"
+    ? "Duplicate — the analyzer re-transmitted, nothing was inserted twice."
+    : res.status === "IGNORED"
+    ? "Quality-control sample — acknowledged, but not stored as patient data."
+    : ok ? `${res.stored} result(s) written` + (res.duplicates ? `, ${res.duplicates} duplicate(s) skipped` : "")
+    : `Rejected: ${res.note}`;
+  $("ackText").innerHTML = `<b>${esc(res.analyzer_name || "")}</b> · ${esc(proto)} · ` +
+    `message #${esc(res.message_id)} · ${res._ms} ms${times > 1 ? " · sent ×" + times : ""}<br>${esc(note)}`;
+
+  const done = res.status === "ERROR" ? [] : [0, 1, 2, 3, 4];
+  setStages(done, res.status === "ERROR" ? 2 : null);
+
+  const ack = res.ack || "";
+  $("ackPayload").textContent = ack
+    ? ack.replace(/\x06/g, "ACK (0x06)").replace(/\x15/g, "NAK (0x15)")
+         .replace(/\x0b/g, "<VT>").replace(/\x1c/g, "<FS>")
+    : "— (no reply configured)";
+
+  const pipeMap = { ERROR: "pipe-parse", DUPLICATE: "pipe-store", PARSED: "pipe-apex", IGNORED: "pipe-validate" };
+  document.querySelectorAll(".pipe-step").forEach(p => p.classList.remove("active", "error"));
+  const target = $(pipeMap[res.status] || "pipe-store");
+  if (target) target.classList.add(res.status === "ERROR" ? "error" : "active");
+  setTimeout(() => document.querySelectorAll(".pipe-step").forEach(p => p.classList.remove("active", "error")), 2400);
+
+  toast(ok ? (res.status === "DUPLICATE" ? "Duplicate ignored — dedupe working"
+              : res.status === "IGNORED" ? "Control sample ignored (ACK sent)"
+              : `${res.stored} result(s) stored`)
+            : "Message rejected — raw payload still kept for replay", !ok);
+}
+
+/* ---------------- rendering ---------------- */
+async function refresh() {
+  const data = await fetch("/api/state").then(r => r.json());
+  state.data = data;
+  render(data);
+}
+
+function render(data) {
+  const s = data.stats.database || {};
+  $("stTotal").textContent = s.total ?? 0;
+  $("stToday").textContent = s.today ?? 0;
+  $("stAbnormal").textContent = s.abnormal ?? 0;
+  $("stCritical").textContent = s.critical ?? 0;
+  $("dbMode").textContent = `in-memory · ${s.messages ?? 0} raw msg`;
+  renderTable();
+}
+
+function renderTable() {
+  const d = state.data;
+  if (!d) return;
+  const el = $("tableView");
+
+  if (state.view === "results") {
+    if (!d.results.length) { el.innerHTML = `<div class="empty">No results yet — send a message.</div>`; return; }
+    el.innerHTML = `<table><thead><tr>
+        <th>sample</th><th>patient</th><th>test</th><th>value</th><th>unit</th><th>ref</th><th>flag</th><th>analyzer</th>
+      </tr></thead><tbody>${d.results.map(r => `<tr>
+        <td>${esc(r.sample_id)}</td>
+        <td>${esc(r.patient_name || r.patient_id || "—")}</td>
+        <td>${esc(r.test_code)}</td>
+        <td style="color:${r.abnormal_flag !== "N" ? "var(--warn)" : "var(--txt)"}">${esc(r.result_text || r.result_value)}</td>
+        <td style="color:var(--muted)">${esc(r.result_unit || "—")}</td>
+        <td style="color:var(--muted)">${esc(r.ref_range || "—")}</td>
+        <td><span class="flag ${esc(r.abnormal_flag)}">${esc(r.abnormal_flag)}</span></td>
+        <td style="color:var(--muted)">${esc(r.analyzer_name)}</td>
+      </tr>`).join("")}</tbody></table>`;
+    return;
+  }
+
+  if (state.view === "samples") {
+    if (!d.samples.length) { el.innerHTML = `<div class="empty">No samples yet.</div>`; return; }
+    el.innerHTML = `<table><thead><tr><th>sample</th><th>patient</th><th>tests</th><th>analyzer</th><th>received</th></tr></thead>
+      <tbody>${d.samples.map(s => `<tr>
+        <td>${esc(s.sample_id)}</td>
+        <td>${esc(s.patient_name || s.patient_id || "—")}</td>
+        <td>${s.tests.map(t => `<span class="flag ${esc(t.abnormal_flag)}" style="margin-right:4px">${esc(t.test_code)}</span>`).join("")}</td>
+        <td style="color:var(--muted)">${esc(s.analyzer_name)}</td>
+        <td style="color:var(--muted)">${esc(s.received_at)}</td>
+      </tr>`).join("")}</tbody></table>`;
+    return;
+  }
+
+  if (!d.messages.length) { el.innerHTML = `<div class="empty">No raw messages yet.</div>`; return; }
+  el.innerHTML = d.messages.map(m => `<div class="msg" style="padding:9px 14px">
+      <div class="mh">
+        <span class="status ${esc(m.status)}">${esc(m.status)}</span>
+        <span class="name">#${m.message_id} ${esc(m.analyzer_name)}</span>
+        <span style="color:var(--muted);font-size:10.5px">${esc(m.protocol)}</span>
+        <span class="time">${esc(m.received_at)}</span>
+      </div>
+      <div class="raw">${esc((m.raw_message || "").slice(0, 260))}</div>
+    </div>`).join("");
+}
+
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("on"));
+    tab.classList.add("on");
+    state.view = tab.dataset.view;
+    renderTable();
+  };
+});
+
+$("sendBtn").onclick = () => send(1);
+$("repeatBtn").onclick = () => send(3);
+$("resetBtn").onclick = async () => {
+  await fetch("/api/reset", { method: "POST" });
+  $("ackPill").textContent = "IDLE";
+  $("ackPill").className = "pill idle";
+  $("ackText").innerHTML = "Store cleared. Send a message to start again.";
+  $("ackPayload").textContent = "—";
+  setStages([], null);
+  document.querySelectorAll(".pipe-step").forEach(p => p.classList.remove("active", "error"));
+  refresh();
+  toast("In-memory store cleared");
+};
+
+setStages([], null);
+</script>
+</body>
+</html>
