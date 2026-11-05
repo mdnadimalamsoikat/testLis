@@ -166,6 +166,51 @@ nssm status LISMiddleware
 
 ---
 
+## ৫.২ `ORA-00932` — APEX ইনস্টলের সাথে এর কোনো সম্পর্ক নেই
+
+```
+ORA-00932: inconsistent datatypes: expected NUMBER got INTERVAL DAY TO SECOND
+   at: CREATE OR REPLACE VIEW v_lis_analyzers ...
+```
+
+APEX ইনস্টল আছে কি নেই, তার সাথে এই এররের সম্পর্ক শূন্য। এটা **আমার SQL-এর ভুল**:
+
+> Oracle-এ `TIMESTAMP − TIMESTAMP = INTERVAL DAY TO SECOND`, কোনো NUMBER নয়।
+> তাই `(SYSTIMESTAMP − last_seen_at) * 86400` লিখলে 19.3 সরাসরি ORA-00932 দেয়।
+
+**সমাধান — এক ফাইল, এক মিনিট** (`fix_02` নিজেই বাকি সব শেষ করে দেয়):
+
+```powershell
+# SQL Developer → TESTLIS সংযোগ → database\fix\fix_02_finish_install.sql খুলুন → F5
+# অথবা
+python tools\install_sql.py --sqlplus "sqlplus -S TESTLIS/pass@//localhost:1521/ORCL" ^
+    --file database\fix\fix_02_finish_install.sql
+```
+
+ফাইলটা ক্রম মেনে কাজ করে: **(১) কলাম** (শুধু যেগুলো নেই — `ORA-01430` এড়াতে) → **(২) চারটি ভিউ**
+(INTERVAL-নিরাপদ হিসাব সহ) → **(৩) দুটো ট্রিগার** → **(৪) ডেমো ডেটা** (`NOT EXISTS`, তাই আবার
+চালালে ডুপ্লিকেট হয় না) → **(৫) দুটো যাচাই-কুয়েরি**।
+
+শেষে যা দেখা উচিত:
+
+```
+ANALYZER_NAME          PROTOCOL ENDPOINT               STATE     MESSAGES_RECEIVED
+Sysmex_XN_1000         ASTM     0.0.0.0:6661           UNKNOWN                   0
+Mindray_BS240          HL7      0.0.0.0:6662           UNKNOWN                   0
+Roche_Cobas_c311       ASTM     COM3 @ 9600            UNKNOWN                   0
+
+VIEWS_CREATED
+            4
+```
+
+তারপর:
+
+```powershell
+python tools\apex_setup.py --verify-only --user TESTLIS --service ORCL
+```
+
+সব ✓ এলে ইনস্টল শেষ। (`STATE = UNKNOWN` স্বাভাবিক — `service.py` চালু হলেই ONLINE হবে।)
+
 ## ৬. আটকে গেলে
 
 | যা দেখছেন | কারণ | সমাধান |

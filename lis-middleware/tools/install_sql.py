@@ -65,19 +65,31 @@ def split_blocks(sql: str) -> List[Tuple[str, bool]]:
         buffer.append(line)
         text = "\n".join(buffer)
         if not in_string:
-            head = " ".join(text.split()[:5]).upper()
-            if not plsql and (head.startswith(("CREATE OR REPLACE TRIGGER", "CREATE TRIGGER",
-                                               "CREATE OR REPLACE PROCEDURE",
-                                               "CREATE OR REPLACE FUNCTION",
-                                               "CREATE OR REPLACE PACKAGE"))
-                              or head in ("BEGIN", "DECLARE")):
+            words = [w.upper() for w in text.split()[:6]]
+            first = words[0] if words else ""
+            two = " ".join(words[:2])
+            three = " ".join(words[:3])
+            four = " ".join(words[:4])
+            is_block = (
+                first in ("BEGIN", "DECLARE")
+                or two.startswith("CREATE TRIGGER")
+                or three.startswith("CREATE OR REPLACE") and len(words) > 3
+                   and words[3] in ("TRIGGER", "PROCEDURE", "FUNCTION", "PACKAGE", "TYPE")
+                or four.startswith("CREATE OR REPLACE TRIGGER")
+            )
+            if not plsql and is_block:
                 plsql = True
         if line.count("'") % 2:
             in_string = not in_string
         if in_string:
             continue
 
-        if plsql and stripped == "/":
+        if stripped == "/" and buffer:
+            # a lone slash always ends a unit — never let it be swallowed into
+            # the next statement if the head detection guessed wrong
+            blocks.append(("\n".join(buffer[:-1]).strip(), plsql))
+            buffer, plsql = [], False
+        elif plsql and stripped == "/":
             blocks.append(("\n".join(buffer[:-1]).strip(), True))
             buffer, plsql = [], False
         elif not plsql and stripped.endswith(";"):

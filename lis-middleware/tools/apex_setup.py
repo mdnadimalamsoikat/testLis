@@ -34,6 +34,7 @@ import getpass
 import os
 import re
 import sys
+import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -43,92 +44,27 @@ APEX_SQL = ROOT / "database" / "apex_install.sql"
 
 SKIP_PREFIXES = ("PROMPT", "SET ", "SPOOL", "WHENEVER", "COLUMN ", "CLEAR ", "PAUSE")
 # errors that mean "already installed" — safe to ignore on a re-run
-IGNORABLE = ("ORA-00955", "ORA-01430", "ORA-00942", "ORA-02260", "ORA-02275",
-             "ORA-04081", "ORA-01408", "ORA-06512")
+IGNORABLE = ("ORA-00955",   # object already exists
+             "ORA-01430",   # column already exists (we add conditionally now)
+             "ORA-02260",   # only one primary key
+             "ORA-02275",   # constraint already exists
+             "ORA-04081",   # trigger already exists
+             "ORA-01408",   # index on these columns exists
+             "ORA-00001")   # duplicate seed row
 
 
 # ---------------------------------------------------------------- SQL parsing
 def split_statements(sql: str) -> List[str]:
-    """Split a SQL*Plus script into statements.
+    """Split a SQL*Plus script into units that can run one by one.
 
-    Handles the three things that break a naive `split(';')`:
-      * `;` inside a string literal      ('a;b')
-      * `--` comments
-      * PL/SQL blocks, terminated by `/` on its own line (our triggers)
+    The rules live in `tools/install_sql.py` (line based) and are shared with
+    the SQL*Plus runner, so both tools always agree on where a statement ends.
+    PL/SQL blocks come back without their closing `/`.
     """
-    statements: List[str] = []
-    buffer: List[str] = []
-    in_string = False
-    in_comment = False
-    is_plsql = False
-    index = 0
-    length = len(sql)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tools.install_sql import split_blocks
 
-    while index < length:
-        char = sql[index]
-        nxt = sql[index + 1] if index + 1 < length else ""
-
-        if in_comment:
-            if char == "\n":
-                in_comment = False
-                buffer.append(char)
-            index += 1
-            continue
-
-        if not in_string and char == "-" and nxt == "-":
-            in_comment = True
-            index += 2
-            continue
-
-        if char == "'":
-            # '' escapes a quote inside a literal
-            if in_string and nxt == "'":
-                buffer.append("''")
-                index += 2
-                continue
-            in_string = not in_string
-            buffer.append(char)
-            index += 1
-            continue
-
-        if not in_string:
-            # `/` alone on a line closes a PL/SQL block
-            if char == "/" and is_plsql and not "".join(buffer).rsplit("\n", 1)[-1].strip():
-                text = "".join(buffer).strip()
-                if text:
-                    statements.append(text)
-                buffer = []
-                is_plsql = False
-                index += 1
-                continue
-
-            if char == ";" and not is_plsql:
-                text = "".join(buffer).strip()
-                buffer = []
-                if text:
-                    statements.append(text)
-                index += 1
-                continue
-
-        buffer.append(char)
-        index += 1
-
-        # decide early whether this one needs `/`
-        if not is_plsql and not in_string:
-            head = " ".join("".join(buffer).split()[:5]).upper()
-            if head in ("BEGIN", "DECLARE") or head.startswith("CREATE OR REPLACE TRIGGER") \
-                    or head.startswith("CREATE TRIGGER") \
-                    or head.startswith("CREATE OR REPLACE PROCEDURE") \
-                    or head.startswith("CREATE OR REPLACE FUNCTION") \
-                    or head.startswith("CREATE OR REPLACE PACKAGE") \
-                    or head.startswith("CREATE OR REPLACE TYPE"):
-                is_plsql = True
-
-    tail = "".join(buffer).strip()
-    if tail:
-        statements.append(tail)
-
-    return [s for s in statements if _runnable(s)]
+    return [text for text, _is_plsql in split_blocks(sql) if _runnable(text)]
 
 
 def _runnable(statement: str) -> bool:
@@ -150,6 +86,10 @@ def preview(statement: str, width: int = 72) -> str:
 
 
 # ------------------------------------------------------------------- running
+class ScriptFailed(RuntimeError):
+    """A statement failed; run_script already printed which one."""
+
+
 def run_script(cursor, path: Path, label: str, quiet: bool = False) -> Tuple[int, int]:
     """Execute every statement; returns (ok, skipped_already_exists)."""
     statements = split_statements(path.read_text(encoding="utf-8"))
@@ -168,8 +108,10 @@ def run_script(cursor, path: Path, label: str, quiet: bool = False) -> Tuple[int
                 if not quiet:
                     print(f"   • {number:2d}. already there — {head}")
                 continue
-            print(f"\n❌ {label}: statement {number} failed\n   {preview(statement, 200)}\n   {head}")
-            raise
+            print(f"\n❌ {label}: statement {number} failed\n   {preview(statement, 200)}")
+            print(f"   {message.splitlines()[0]}")
+            print("   এখানেই থামলাম — উপরেরটা ঠিক করে আবার চালালেই বাকিগুলো চলবে।")
+            raise ScriptFailed(f"{label} #{number}: {head}") from None
     return ok, skipped
 
 
@@ -210,10 +152,14 @@ def create_user(args, dsn: str, version: str) -> None:
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM all_users WHERE username = :u", {"u": args.user.upper()})
         if cur.fetchone()[0]:
-            print(f"• ইউজার {args.user} আগেই আছে — বানাতে হবে না")
+            print(f"• ইউজার {args.user} আগেই আছে — গ্রান্ট ঠিক করছি")
+            cur.execute(f"GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE TRIGGER, "
+                        f"CREATE SEQUENCE, CREATE PROCEDURE TO {args.user}")
         else:
             cur.execute(f'CREATE USER {args.user} IDENTIFIED BY "{password}"')
-            cur.execute(f"GRANT CONNECT, RESOURCE TO {args.user}")
+            # RESOURCE alone has no CREATE VIEW — v_lis_* would fail with ORA-01031
+            cur.execute(f"GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE TRIGGER, "
+                        f"CREATE SEQUENCE, CREATE PROCEDURE TO {args.user}")
             cur.execute(f"ALTER USER {args.user} QUOTA UNLIMITED ON USERS")
             cur.execute(f"ALTER USER {args.user} DEFAULT TABLESPACE USERS")
             print(f"✅ ইউজার {args.user} তৈরি হয়েছে")
@@ -491,8 +437,15 @@ def main() -> int:
 
             print("\n→ যাচাই করছি")
             failed = 0 if verify(cursor) else 1
+    except ScriptFailed:
+        print("\nকিছু object আগেই তৈরি হয়ে গেছে — ঠিক করার পর পুরোটা আবার চালাতে দ্বিধা করবেন না।")
+        print('হাতে দেখতে চাইলে:  python tools/install_sql.py --sqlplus "sqlplus -S user/pass@db"')
+        return 1
     finally:
-        connection.close()
+        try:
+            connection.close()
+        except Exception:
+            pass
 
     if args.write_config:
         print()
