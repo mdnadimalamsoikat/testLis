@@ -301,30 +301,28 @@ class DatabaseControl:
             UPDATE {self.schema}.lis_config
                SET last_applied_at = SYSTIMESTAMP,
                    applied_at = SYSTIMESTAMP,
-                   applied_by = :by,
+                   applied_by = {_lit(by)},
                    last_error = NULL
              WHERE status = 'ACTIVE'
         """
         try:
             with self.db.cursor() as cur:
-                cur.execute(sql, {"by": by[:100]})
+                cur.execute(sql)
         except Exception as exc:
             logger.warning("could not mark config applied: %s", exc)
 
     def set_last_error(self, message: str, analyzer: Optional[str] = None) -> None:
         sql = f"""
             UPDATE {self.schema}.lis_config
-               SET last_error = :err,
+               SET last_error = {_lit(message, 500)},
                    last_error_at = SYSTIMESTAMP
              WHERE status = 'ACTIVE'
         """
-        params: Dict[str, Any] = {"err": message[:500]}
         if analyzer:
-            sql += " AND analyzer_name = :name"
-            params["name"] = analyzer
+            sql += f" AND analyzer_name = {_lit(analyzer)}"
         try:
             with self.db.cursor() as cur:
-                cur.execute(sql, params)
+                cur.execute(sql)
         except Exception as exc:
             logger.warning("could not record config error: %s", exc)
 
@@ -332,42 +330,42 @@ class DatabaseControl:
         """Heartbeat: one row per analyzer, so APEX can show online/offline."""
         if not statuses:
             return
-        sql = f"""
-            MERGE INTO {self.schema}.lis_analyzer_status t
-            USING (SELECT :name AS analyzer_name FROM dual) s
-               ON (t.analyzer_name = s.analyzer_name)
-            WHEN MATCHED THEN UPDATE SET
-                 t.protocol = :protocol,
-                 t.connection_type = :conn,
-                 t.host = :host,
-                 t.port = :port,
-                 t.state = :state,
-                 t.active_connections = :conns,
-                 t.messages_received = :messages,
-                 t.last_message_at = CASE WHEN :last_seen IS NULL THEN t.last_message_at
-                                          ELSE TO_TIMESTAMP(:last_seen, 'YYYY-MM-DD HH24:MI:SS') END,
-                 t.last_seen_at = SYSTIMESTAMP
-            WHEN NOT MATCHED THEN INSERT
-                 (analyzer_name, protocol, connection_type, host, port, state,
-                  active_connections, messages_received, last_message_at, last_seen_at)
-            VALUES (:name, :protocol, :conn, :host, :port, :state, :conns, :messages,
-                    CASE WHEN :last_seen IS NULL THEN NULL
-                         ELSE TO_TIMESTAMP(:last_seen, 'YYYY-MM-DD HH24:MI:SS') END, SYSTIMESTAMP)
-        """
-        try:
+        try:  # noqa: SIM105 - a heartbeat must never break the control loop
             with self.db.cursor() as cur:
                 for status in statuses:
-                    cur.execute(sql, {
-                        "name": status.get("name"),
-                        "protocol": status.get("protocol"),
-                        "conn": status.get("connection_type"),
-                        "host": str(status.get("host") or "")[:120],
-                        "port": int(status.get("port") or 0),
-                        "state": "ONLINE" if status.get("running") else "STOPPED",
-                        "conns": int(status.get("active_connections") or 0),
-                        "messages": int(status.get("messages_received") or 0),
-                        "last_seen": status.get("last_message_at"),
-                    })
+                    seen = status.get("last_message_at")
+                    last_seen = (f"TO_TIMESTAMP({_lit(seen, 19)}, 'YYYY-MM-DD HH24:MI:SS')"
+                                 if seen else "NULL")
+                    state = "ONLINE" if status.get("running") else "STOPPED"
+                    name = _lit(status.get("name"))
+                    cur.execute(f"""
+                        MERGE INTO {self.schema}.lis_analyzer_status t
+                        USING (SELECT {name} AS analyzer_name FROM dual) s
+                           ON (t.analyzer_name = s.analyzer_name)
+                        WHEN MATCHED THEN UPDATE SET
+                             t.protocol = {_lit(status.get("protocol"), 10)},
+                             t.connection_type = {_lit(status.get("connection_type"), 10)},
+                             t.host = {_lit(status.get("host"), 120)},
+                             t.port = {int(status.get("port") or 0)},
+                             t.state = {_lit(state, 10)},
+                             t.active_connections = {int(status.get("active_connections") or 0)},
+                             t.messages_received = {int(status.get("messages_received") or 0)},
+                             t.last_message_at = CASE WHEN {last_seen} IS NULL
+                                                      THEN t.last_message_at ELSE {last_seen} END,
+                             t.last_seen_at = SYSTIMESTAMP
+                        WHEN NOT MATCHED THEN INSERT
+                             (analyzer_name, protocol, connection_type, host, port, state,
+                              active_connections, messages_received, last_message_at, last_seen_at)
+                        VALUES ({name},
+                                {_lit(status.get("protocol"), 10)},
+                                {_lit(status.get("connection_type"), 10)},
+                                {_lit(status.get("host"), 120)},
+                                {int(status.get("port") or 0)},
+                                {_lit(state, 10)},
+                                {int(status.get("active_connections") or 0)},
+                                {int(status.get("messages_received") or 0)},
+                                {last_seen}, SYSTIMESTAMP)
+                    """)
         except Exception as exc:
             logger.warning("could not write analyzer status: %s", exc)
 
@@ -390,9 +388,9 @@ class DatabaseControl:
                     update = f"""
                         UPDATE {self.schema}.lis_commands
                            SET status = 'RUNNING', started_at = SYSTIMESTAMP
-                         WHERE command_id = :id AND status = 'PENDING'
+                         WHERE command_id = {int(command_id)} AND status = 'PENDING'
                     """
-                    cur.execute(update, {"id": command_id})
+                    cur.execute(update)
                     if cur.rowcount == 1:
                         claimed.append({
                             "command_id": int(command_id),
@@ -405,31 +403,28 @@ class DatabaseControl:
         return claimed
 
     def finish_command(self, command_id: int, ok: bool, message: str = "") -> None:
+        outcome = "DONE" if ok else "FAILED"
         sql = f"""
             UPDATE {self.schema}.lis_commands
-               SET status = :status,
+               SET status = {_lit(outcome, 10)},
                    finished_at = SYSTIMESTAMP,
-                   result_message = :msg
-             WHERE command_id = :id
+                   result_message = {_lit(message, 1000)}
+             WHERE command_id = {int(command_id)}
         """
         try:
             with self.db.cursor() as cur:
-                cur.execute(sql, {
-                    "status": "DONE" if ok else "FAILED",
-                    "msg": message[:1000],
-                    "id": command_id,
-                })
+                cur.execute(sql)
         except Exception as exc:
             logger.warning("could not finish command %s: %s", command_id, exc)
 
     def insert_audit(self, event: str, analyzer: str, detail: str) -> None:
         sql = f"""
             INSERT INTO {self.schema}.lis_audit_log (event_type, analyzer_name, detail, created_at)
-            VALUES (:event, :analyzer, :detail, SYSTIMESTAMP)
+            VALUES ({_lit(event, 50)}, {_lit(analyzer)}, {_lit(detail, 1000)}, SYSTIMESTAMP)
         """
         try:
             with self.db.cursor() as cur:
-                cur.execute(sql, {"event": event, "analyzer": analyzer[:100], "detail": detail[:1000]})
+                cur.execute(sql)
         except Exception as exc:
             logger.debug("audit insert failed: %s", exc)
 
@@ -531,6 +526,19 @@ def _analyzer_from_file(raw: Dict[str, Any]) -> AnalyzerConfig:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+#: Oracle rejects a bind variable whose name is a reserved word — `applied_by =
+#: :by` failed with ORA-01745 on 19.3. Renaming the bind is not enough (the
+#: reserved list is long and version dependent: :name, :state, :host, :status …),
+#: so no bind name here is a column name. Values that come from our own rows go
+#: in as quoted literals via `_lit()`, numbers as validated `int()`.
+def _lit(value: Any, limit: int = 100) -> str:
+    """Quote a value for inlining. Returns NULL for None."""
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''")[:limit] + "'"
+
+
+
 def _split_list(value: Any) -> List[str]:
     if value is None:
         return []

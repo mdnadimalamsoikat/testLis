@@ -20,6 +20,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from .db_connection import OracleDB
 
+from database.control import _lit
+
 logger = logging.getLogger("LIS.DBW")
 
 
@@ -47,6 +49,9 @@ class DBWriter:
         message_id_var = None
         try:
             with self.db.cursor() as cur:
+                # OUT binds go inside the dict — passing both a positional dict
+                # and a keyword argument raises DPY-2005 and the raw message is
+                # lost (which is the one thing this layer must never do).
                 message_id_var = cur.var(int)
                 cur.execute(
                     sql,
@@ -55,10 +60,11 @@ class DBWriter:
                         "protocol": protocol,
                         "peer": peer,
                         "raw_message": raw_message,
+                        "message_id": message_id_var,
                     },
-                    message_id=message_id_var,
                 )
-                return int(message_id_var.getvalue()[0])
+                value = message_id_var.getvalue()
+                return int(value[0]) if isinstance(value, list) else int(value)
         except Exception as exc:  # never let logging break the pipeline
             logger.error("could not store raw message from %s: %s", analyzer_name, exc)
             return None
@@ -180,16 +186,16 @@ class DBWriter:
         }
 
     def insert_audit(self, event: str, analyzer: str, detail: str = "") -> None:
+        # values are inlined: `:event`, `:detail` are reserved-word shaped risks
+        # (see database/control.py — ORA-01745 taught us this the hard way)
         sql = f"""
             INSERT INTO {self.schema}.lis_audit_log
                 (event_type, analyzer_name, detail, created_at)
-            VALUES (:event, :analyzer, :detail, SYSTIMESTAMP)
+            VALUES ({_lit(event, 50)}, {_lit(analyzer, 100)},
+                    {_lit(json.dumps(detail), 1000)}, SYSTIMESTAMP)
         """
         try:
             with self.db.cursor() as cur:
-                cur.execute(
-                    sql,
-                    {"event": event, "analyzer": analyzer, "detail": json.dumps(detail)[:1000]},
-                )
+                cur.execute(sql)
         except Exception as exc:
             logger.error("audit insert failed: %s", exc)
