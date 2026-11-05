@@ -657,5 +657,78 @@ class TestSqlSplittingRegressions(unittest.TestCase):
                     self.assertNotIn("\n/", text, "a slash leaked into the block body")
 
 
+class TestRawMessageWriter(unittest.TestCase):
+    """The one thing the writer must never do is lose a raw message."""
+
+    def _writer(self):
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from database.db_writer import DBWriter
+
+        captured = {}
+
+        class Cur:
+            rowcount = 1
+
+            def var(self, typ):
+                class Var:
+                    def getvalue(self):
+                        return [4242]
+                return Var()
+
+            def execute(self, sql, params=None, **kwargs):
+                captured["sql"] = " ".join(sql.split())
+                captured["params"] = params
+                captured["kwargs"] = kwargs
+
+            def fetchone(self):
+                return (0,)
+
+            def close(self):
+                pass
+
+        class DB:
+            schema = "TESTLIS"
+
+            @contextmanager
+            def cursor(self):
+                yield Cur()
+
+        writer = DBWriter.__new__(DBWriter)
+        writer.schema = "TESTLIS"
+        writer.db = DB()
+        return writer, captured
+
+    def test_out_bind_is_passed_in_the_dict(self):
+        """DPY-2005 came from execute(sql, dict, message_id=var) — both styles."""
+        writer, captured = self._writer()
+        message_id = writer.log_raw_message("A", "ASTM", "H|\^&|||Sysmex", peer="127.0.0.1")
+        self.assertEqual(message_id, 4242)
+        self.assertEqual(captured["kwargs"], {}, "a keyword arg next to a dict raises DPY-2005")
+        self.assertIn("message_id", captured["params"])
+        self.assertIn("RETURNING message_id INTO :message_id", captured["sql"])
+
+
+class TestNoReservedWordBinds(unittest.TestCase):
+    """ORA-01745: a bind variable may not be named like a reserved word."""
+
+    def test_control_layer_has_no_reserved_binds(self):
+        import re
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "database" / "control.py").read_text(encoding="utf-8")
+        reserved = {"by", "name", "state", "host", "status", "size", "comment", "date",
+                    "level", "protocol", "event", "detail", "analyzer", "messages", "err", "msg"}
+        for match in re.finditer(r"execute\(\s*f?\"[^\"]*\"", source):
+            for bind in re.findall(r"[:]([a-z_][a-z0-9_]*)", match.group(0).lower()):
+                self.assertNotIn(bind, reserved, f"reserved bind :{bind} near {match.group(0)[:60]}")
+
+    def test_applied_by_is_inlined_not_bound(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "database" / "control.py").read_text(encoding="utf-8")
+        body = source[source.index("def mark_applied"):source.index("def set_last_error")]
+        self.assertIn("_lit(by)", body)
+        self.assertNotIn(":by", body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

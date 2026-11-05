@@ -211,6 +211,23 @@ python tools\apex_setup.py --verify-only --user TESTLIS --service ORCL
 
 সব ✓ এলে ইনস্টল শেষ। (`STATE = UNKNOWN` স্বাভাবিক — `service.py` চালু হলেই ONLINE হবে।)
 
+## ৫.৪ `DPY-2005` — raw message সংরক্ষণ হচ্ছিল না
+
+```
+ERROR | LIS.DBW | could not store raw message: DPY-2005: expecting positional
+                  arguments or keyword arguments, not both
+```
+
+`cur.execute(sql, {dict}, message_id=var)` — python-oracledb একসাথে দুটো স্টাইল নেয় না।
+ফলে `lis_raw_messages`-এ কিছুই যাচ্ছিল না (অথচ রেজাল্ট ইনসার্ট হচ্ছিল — তাই চোখে পড়ে না)।
+সেটাই আমাদের "কোনো ডেটা হারাবে না" প্রতিশ্রুতির সবচেয়ে জরুরি জায়গা।
+
+ঠিক করা হয়েছে: OUT bind-টা এখন dict-এর ভেতরেই (`"message_id": var`)। সাথে একটা
+ইউনিট টেস্ট আছে, যাতে ভবিষ্যতে কেউ আবার keyword-arg ফেরত না আনে।
+
+`ORA-01745`-এর মতো এটাও `git pull` করলেই ঠিক হয়ে যাবে — সোর্স কোডের বাগ, ডেটাবেসে
+কিছু করতে হবে না।
+
 ## ৬. আটকে গেলে
 
 | যা দেখছেন | কারণ | সমাধান |
