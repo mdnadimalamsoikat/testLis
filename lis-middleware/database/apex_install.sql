@@ -94,13 +94,28 @@ CREATE INDEX idx_lis_commands_pending ON lis_commands (status, requested_at);
 -- 4. heartbeat — lis_analyzer_status already exists (database/schema.sql);
 --    here we only add the columns the control plane wants.
 -- ---------------------------------------------------------------------------
-ALTER TABLE lis_analyzer_status ADD (
-    host               VARCHAR2(120),
-    port               NUMBER,
-    active_connections NUMBER DEFAULT 0,
-    messages_received  NUMBER DEFAULT 0,
-    last_message_at    TIMESTAMP
-);
+-- Conditional and re-runnable: a plain ADD raises ORA-01430 when the column
+-- already exists (newer schema.sql, or a second run of this script). Because
+-- v_lis_analyzers below selects these columns, "already there" is FINE — but
+-- "partially there" would break the view, hence one check per column.
+DECLARE
+    PROCEDURE add_col(p_name VARCHAR2, p_type VARCHAR2) IS
+        n NUMBER;
+    BEGIN
+        SELECT COUNT(*) INTO n FROM user_tab_columns
+         WHERE table_name = 'LIS_ANALYZER_STATUS' AND column_name = p_name;
+        IF n = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE lis_analyzer_status ADD (' || p_name || ' ' || p_type || ')';
+        END IF;
+    END;
+BEGIN
+    add_col('HOST',               'VARCHAR2(120)');
+    add_col('PORT',               'NUMBER');
+    add_col('ACTIVE_CONNECTIONS', 'NUMBER DEFAULT 0');
+    add_col('MESSAGES_RECEIVED',  'NUMBER DEFAULT 0');
+    add_col('LAST_MESSAGE_AT',    'TIMESTAMP');
+END;
+/
 
 -- lis_audit_log / lab_results / lis_raw_messages come from database/schema.sql;
 -- run that one first if you have not already.
@@ -128,7 +143,14 @@ SELECT c.config_id,
        s.state,
        s.last_message_at,
        s.messages_received,
-       ROUND((CAST(SYSTIMESTAMP AS DATE) - s.last_seen_at) * 86400) AS seconds_since_seen,
+       -- TIMESTAMP − TIMESTAMP = INTERVAL, NOT a NUMBER: multiplying it gives
+       -- ORA-00932 on 19.3. Break the interval into days/hours/minutes/seconds.
+       CASE WHEN s.last_seen_at IS NULL THEN NULL
+            ELSE ROUND(EXTRACT(DAY    FROM (CAST(SYSTIMESTAMP AS TIMESTAMP) - s.last_seen_at)) * 86400
+                     + EXTRACT(HOUR   FROM (CAST(SYSTIMESTAMP AS TIMESTAMP) - s.last_seen_at)) * 3600
+                     + EXTRACT(MINUTE FROM (CAST(SYSTIMESTAMP AS TIMESTAMP) - s.last_seen_at)) * 60
+                     + EXTRACT(SECOND FROM (CAST(SYSTIMESTAMP AS TIMESTAMP) - s.last_seen_at)))
+       END AS seconds_since_seen,
        c.last_applied_at,
        c.last_error,
        c.updated_at

@@ -594,7 +594,8 @@ class TestInstallerTools(unittest.TestCase):
         from tools.install_sql import split_blocks
         blocks = split_blocks(self._sql("apex_install.sql"))
         plsql = [text for text, is_plsql in blocks if is_plsql]
-        self.assertEqual(len(plsql), 2)
+        # column-fix block + two triggers
+        self.assertEqual(len(plsql), 3)
         for text in plsql:
             self.assertTrue(text.rstrip().endswith("END;"))
         for text, is_plsql in blocks:
@@ -609,6 +610,51 @@ class TestInstallerTools(unittest.TestCase):
         names = {s.split("(", 1)[0].split()[-1].lower() for s in creates}
         self.assertEqual(names, {"lis_raw_messages", "lab_results", "lis_audit_log",
                                  "lis_analyzer_status"})
+
+
+class TestSqlSplittingRegressions(unittest.TestCase):
+    """Bugs found on a real 19.3 install — these must never come back."""
+
+    def _read(self, *parts) -> str:
+        root = Path(__file__).resolve().parents[1]
+        return root.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_no_timestamp_minus_timestamp_maths(self):
+        """TIMESTAMP - TIMESTAMP is an INTERVAL: (x) * 86400 → ORA-00932."""
+        from tools.install_sql import split_blocks
+        for name in ("apex_install.sql",):
+            for text, _ in split_blocks(self._read("database", name)):
+                self.assertNotIn("CAST(SYSTIMESTAMP AS DATE) -", text,
+                                 "19.3 rejects DATE arithmetic on a TIMESTAMP column")
+
+    def test_the_view_is_created_after_its_columns(self):
+        """v_lis_analyzers reads lis_analyzer_status.host — it must exist first."""
+        from tools.install_sql import split_blocks
+        for path in (("database", "fix", "fix_02_finish_install.sql"),
+                     ("database", "apex_install.sql")):
+            blocks = split_blocks(self._read(*path))
+            columns = next(i for i, (t, _) in enumerate(blocks) if "add_col('HOST'" in t)
+            view = next(i for i, (t, _) in enumerate(blocks) if "V_LIS_ANALYZERS" in t.upper())
+            self.assertLess(columns, view, f"columns must be added before the view in {path[-1]}")
+
+    def test_fix_02_is_idempotent(self):
+        from tools.install_sql import split_blocks
+        blocks = split_blocks(self._read("database", "fix", "fix_02_finish_install.sql"))
+        inserts = [t for t, _ in blocks if t.upper().lstrip().startswith("INSERT")]
+        self.assertTrue(inserts)
+        for insert in inserts:
+            self.assertIn("NOT EXISTS", insert.upper(), "a re-run must not duplicate seed rows")
+        self.assertFalse(any("ALTER TABLE lis_analyzer_status ADD (" in t.upper()
+                             for t, _ in blocks), "unconditional ALTER is back")
+
+    def test_every_plsql_block_ends_with_end(self):
+        from tools.install_sql import split_blocks
+        for path in (("database", "apex_install.sql"),
+                     ("database", "fix", "fix_02_finish_install.sql")):
+            for text, is_plsql in split_blocks(self._read(*path)):
+                if is_plsql:
+                    self.assertTrue(text.rstrip().upper().endswith("END;"), text[-60:])
+                    self.assertNotIn("\n/", text, "a slash leaked into the block body")
 
 
 if __name__ == "__main__":
